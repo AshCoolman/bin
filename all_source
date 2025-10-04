@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Usage:
+#   all_source [--append] [--onlyChanged] [--changedSince=<branch>] [--format=ext1,ext2,…] [<root>]
+
+append=0; onlyChanged=0; changedSince=""; format=""; root="."
+
+# Parse args (flags in any order; first non-flag is root)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --append) append=1; shift ;;
+    --onlyChanged) onlyChanged=1; shift ;;
+    --changedSince=*) changedSince="${1#--changedSince=}"; shift ;;
+    --format=*) format="${1#--format=}"; shift ;;
+    --) shift; break ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      root="$1"; shift ;;
+  esac
+done
+
+out="all_source.gitignored.md"
+# absolute path to output (in caller's CWD), Bash 3 compatible
+out_abs="$(cd -P . && pwd)/$out"
+
+# Clear output if not appending
+[[ $append -eq 0 ]] && : > "$out_abs"
+
+# Build extension patterns
+# Default set (unchanged from your working script)
+patterns=( '*.[jt]s' '*.[jt]sx' '*.yaml' '*.yml' '*.sh' '*.json' )
+if [[ -n "$format" ]]; then
+  IFS=',' read -r -a fmts <<<"$format"
+  patterns=()
+  for ext in "${fmts[@]}"; do
+    ext="${ext#.}"                 # drop leading dot if present
+    [[ -n "$ext" ]] && patterns+=("*.${ext}")
+  done
+fi
+
+cd "$root" || exit 1
+
+git ls-files --cached --others --exclude-standard -- "${patterns[@]}" \
+| sort \
+| while IFS= read -r file; do
+  # Resolve absolute source path (Bash 3 compatible)
+  file_abs="$(cd -P -- "$(dirname -- "$file")" && pwd)/$(basename -- "$file")"
+
+  # Skip output file itself
+  [[ "$file_abs" == "$out_abs" ]] && continue
+
+  # --onlyChanged filter (staged or unstaged)
+  if [[ $onlyChanged -eq 1 ]] && [[ -z $(git status --porcelain -- "$file") ]]; then
+    continue
+  fi
+
+  # --changedSince=branch filter
+  if [[ -n $changedSince ]] && [[ -z $(git diff --name-only "$changedSince"..HEAD -- "$file") ]]; then
+    continue
+  fi
+
+  echo "$file"
+  echo "$file" >> "$out_abs"
+  ext="${file##*.}"
+  if [[ $ext =~ ^js$|^jsx$ ]]; then
+    lang="ts"
+  else
+    lang="$ext"
+  fi
+  echo '```'"$lang" >> "$out_abs"
+  cat "$file" >> "$out_abs"
+  echo '' >> "$out_abs"
+  echo '```' >> "$out_abs"
+  echo >> "$out_abs"
+done

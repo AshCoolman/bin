@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Path to the counter file
+counter_file="/tmp/script_counter.txt"
+lock_file="/tmp/script_counter.lock"
+
+# Create lock file; exit if lock cannot be obtained
+if ! shlock -f "$lock_file" -p $$; then
+    echo "Failed to acquire lock."
+    exit 1
+fi
+
+# Read and increment the counter
+if [ -f "$counter_file" ]; then
+    counter=$(<"$counter_file")
+    counter=$((counter+1))
+else
+    counter=1
+fi
+
+# Update the counter file
+echo "$counter" > "$counter_file"
+
+# No explicit unlock needed; lock file should be removed when process exits
+rm "$lock_file"
+
+# Get current date and time with milliseconds
+current_time=$(date +"%Y_%m_%d_%H_%M_%S_%3N")
+
+# Append the counter to ensure uniqueness
+current_time="${current_time}_${counter}"
+
+# Destination directory in /tmp with timestamp and counter
+destination="/tmp/$(basename "$1")_$current_time"
+
+# Move the provided folder to the destination
+if mv "$1" "$destination"; then
+    echo "Successfully moved '$1' to '$destination'."
+else
+    echo "Failed to move '$1'. Please check if the source directory exists and you have the right permissions."
+    exit 1
+fi

@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+
+// Minimal IDE color setter for VSCode (+ iTerm2 on macOS)
+// Usage: ide_set_color #RRGGBB [--recursive|-r]
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const args = process.argv.slice(2);
+const RECURSIVE = args.includes('--recursive') || args.includes('-r');
+
+function printHelp() {
+  console.log('Usage: ide_set_color #RRGGBB [--recursive|-r]');
+  console.log('- Updates package.json "color" and VSCode color customizations');
+  console.log('- On macOS, also adjusts iTerm2 background color');
+  console.log('- With --recursive/-r, also updates nested packages (excludes node_modules)');
+}
+
+if (args.includes('--help') || args.includes('-h')) {
+  printHelp();
+  process.exit(0);
+}
+const raw = args.find(a => /^#?[0-9A-Fa-f]{6}$/.test(a));
+if (!raw) {
+  console.error('Usage: ide_set_color #RRGGBB [--recursive|-r]  (use --help for details)');
+  process.exit(1);
+}
+const HEX = raw.startsWith('#') ? raw : '#' + raw;
+
+function findPackageJsonDirs(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (fs.existsSync(path.join(full, 'package.json'))) out.push(full);
+      try { out.push(...findPackageJsonDirs(full)); } catch (_) {}
+    }
+  }
+  return out;
+}
+
+function setPkgColor(repoDir) {
+  const p = path.join(repoDir, 'package.json');
+  if (!fs.existsSync(p)) return;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    pkg.color = HEX;
+    fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+  } catch (_) {}
+}
+
+function setVSCode(repoDir) {
+  const vs = path.join(repoDir, '.vscode');
+  const sp = path.join(vs, 'settings.json');
+
+  try { if (!fs.existsSync(vs)) fs.mkdirSync(vs); } catch (_) {}
+
+  // Merge if settings.json is valid JSON; otherwise start fresh
+  let current = {};
+  try { current = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (_) {}
+
+  const wcc = current['workbench.colorCustomizations'] || {};
+  wcc['activityBar.background'] = HEX;
+  wcc['titleBar.activeBackground'] = HEX;
+  current['workbench.colorCustomizations'] = wcc;
+
+  try { fs.writeFileSync(sp, JSON.stringify(current, null, 2) + '\n'); } catch (_) {}
+}
+
+function setIterm2(hex) {
+  if (process.platform !== 'darwin') return;
+  try {
+    const [r,g,b] = hex.slice(1).match(/.{2}/g).map(v => parseInt(v,16)/255);
+    const script = `tell application "iTerm2" to tell current window to tell current session to set background color to {${r},${g},${b}}`;
+    execSync('osascript', { input: script });
+  } catch (_) {}
+}
+
+(function main(){
+  const root = process.cwd();
+  setPkgColor(root);
+  const dirs = RECURSIVE ? findPackageJsonDirs(root) : [];
+  for (const d of dirs) setPkgColor(d);
+  for (const d of [root, ...dirs]) setVSCode(d);
+  setIterm2(HEX);
+  console.log(`Applied ${HEX} to ${1 + dirs.length} package(s) and VSCode settings`);
+})();

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: script input.mov max_size_MB [speed_multiplier=1.5]
+
+err(){ printf "ERROR: %s\n" "$*" >&2; exit 1; }
+need(){ command -v "$1" >/dev/null 2>&1 || err "Missing dependency: $1"; }
+
+# --- required tools ---
+need ffmpeg
+need ffprobe
+need bc
+need awk
+need sed
+
+# --- capability checks (portable; no PCRE/grep -P) ---
+ff_list_names() {
+  case "$1" in
+    encoders)
+      ffmpeg -hide_banner -v error -encoders \
+        | awk 'NF>=2 && $1 !~ /Encoders:|------/ {print $2}'
+      ;;
+    filters)
+      ffmpeg -hide_banner -v error -filters \
+        | awk 'NF>=2 && $1 !~ /Filters:|------/ {print $2}'
+      ;;
+    *) err "ff_list_names: unknown list '$1'";;
+  esac
+}
+ff_has() { # $1=list (encoders|filters), $2=name
+  ff_list_names "$1" | grep -Fxq "$2"
+}
+
+ff_has encoders libx264 || err "ffmpeg built without libx264 encoder"
+ff_has encoders aac     || err "ffmpeg built without AAC encoder"
+ff_has filters  setpts  || err "ffmpeg missing 'setpts' filter"
+ff_has filters  fps     || err "ffmpeg missing 'fps' filter"
+ff_has filters  scale   || err "ffmpeg missing 'scale' filter"
+ff_has filters  unsharp || err "ffmpeg missing 'unsharp' filter"
+ff_has filters  atempo  || err "ffmpeg missing 'atempo' filter"
+
+# --- args ---
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "Usage: $0 input.mov max_size_MB [speed_multiplier=1.5]"
+  exit 1
+fi
+
+INPUT="$1"
+MAX_MB="$2"
+SPEED="${3:-1.5}"
+OUTPUT="${INPUT%.*}_max${MAX_MB}MB_${SPEED}x.mp4"
+
+[[ -f "$INPUT" ]] || err "Input not found: $INPUT"
+[[ "$MAX_MB" =~ ^[0-9]+([.][0-9]+)?$ ]] || err "max_size_MB must be a number"
+[[ "$SPEED"  =~ ^[0-9]+([.][0-9]+)?$ ]] || err "speed must be a number"
+(( $(echo "$SPEED > 0" | bc -l) )) || err "speed must be > 0"
+
+# --- probe duration ---
+DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$INPUT") || true
+[[ -n "${DURATION:-}" ]] || err "Could not probe duration"
+
+# --- bitrate budget (UNDER cap, single-pass) ---
+# Output duration adjusts for speed: setpts=PTS/SPEED ⇒ duration / SPEED
+OUT_DUR=$(echo "scale=6; $DURATION / $SPEED" | bc -l)
+
+AUDIO_KBPS=64
+HEADROOM=0.88  # conservative to stay under cap
+TARGET_KBPS=$(echo "$MAX_MB*1024*1024*8 / $OUT_DUR / 1000" | bc -l)
+SAFE_TOTAL_KBPS=$(echo "$TARGET_KBPS * $HEADROOM"       | bc -l)
+VIDEO_KBPS=$(echo "$SAFE_TOTAL_KBPS - $AUDIO_KBPS"      | bc -l | awk '{printf "%.0f",$0}')
+(( VIDEO_KBPS < 50 )) && VIDEO_KBPS=50
+BUF_KBPS=$(( VIDEO_KBPS * 2 ))
+
+# --- audio atempo chain for any SPEED ---
+AUDIO_ARGS=()
+if (( $(echo "$SPEED != 1" | bc -l) )); then
+  factor="$SPEED"
+  atempo_filters=()
+  while (( $(echo "$factor > 2.0" | bc -l) )); do
+    atempo_filters+=("atempo=2.0")
+    factor=$(echo "$factor / 2.0" | bc -l)
+  done
+  while (( $(echo "$factor < 0.5" | bc -l) )); do
+    atempo_filters+=("atempo=0.5")
+    factor=$(echo "$factor / 0.5" | bc -l)
+  done
+  atempo_filters+=("atempo=$factor")
+  AUDIO_FILTER=$(IFS=,; echo "${atempo_filters[*]}")
+  AUDIO_ARGS=(-filter:a "$AUDIO_FILTER")
+fi
+
+# --- encode (single-pass, VBV-locked) ---
+ffmpeg -hide_banner -y -i "$INPUT" \
+  -map 0:v:0 -map 0:a:0? -sn -dn \
+  -vf "setpts=PTS/${SPEED},fps=30,scale=trunc(iw*0.75/2)*2:trunc(ih*0.75/2)*2,unsharp=5:5:1.0:5:5:0.0" \
+  -pix_fmt yuv420p \
+  -c:v libx264 -preset slow -g 30 -x264-params "bframes=0:nal-hrd=cbr" \
+  -b:v "${VIDEO_KBPS}k" -minrate "${VIDEO_KBPS}k" -maxrate "${VIDEO_KBPS}k" -bufsize "${BUF_KBPS}k" \
+  "${AUDIO_ARGS[@]}" -c:a aac -ac 1 -b:a "${AUDIO_KBPS}k" \
+  -movflags +faststart \
+  "$OUTPUT"
