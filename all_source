@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Usage:
-#   all_source [--append] [--onlyChanged] [--changedSince=<branch>] [--format=ext1,ext2,…] [<root>]
+#   all_source [--append] [--onlyChanged] [--changedSince=<branch>] [--format=ext1,ext2,…] [--exclude=pathOrExt1,pathOrExt2,…] [<root>]
 
-append=0; onlyChanged=0; changedSince=""; format=""; root="."
+append=0; onlyChanged=0; changedSince=""; format=""; exclude=""; root="."
 
 # Parse args (flags in any order; first non-flag is root)
 while [[ $# -gt 0 ]]; do
@@ -11,45 +11,67 @@ while [[ $# -gt 0 ]]; do
     --onlyChanged) onlyChanged=1; shift ;;
     --changedSince=*) changedSince="${1#--changedSince=}"; shift ;;
     --format=*) format="${1#--format=}"; shift ;;
+    --exclude=*) exclude="${1#--exclude=}"; shift ;;
     --) shift; break ;;
-    -*)
-      echo "Unknown option: $1" >&2
-      exit 2
-      ;;
-    *)
-      root="$1"; shift ;;
+    -*) echo "Unknown option: $1" >&2; exit 2 ;;
+    *)  root="$1"; shift ;;
   esac
 done
 
 out="all_source.gitignored.md"
-# absolute path to output (in caller's CWD), Bash 3 compatible
 out_abs="$(cd -P . && pwd)/$out"
 
 # Clear output if not appending
 [[ $append -eq 0 ]] && : > "$out_abs"
 
 # Build extension patterns
-# Default set (unchanged from your working script)
 patterns=( '*.[jt]s' '*.[jt]sx' '*.yaml' '*.yml' '*.sh' '*.json' )
 if [[ -n "$format" ]]; then
   IFS=',' read -r -a fmts <<<"$format"
   patterns=()
   for ext in "${fmts[@]}"; do
-    ext="${ext#.}"                 # drop leading dot if present
+    ext="${ext#.}"
     [[ -n "$ext" ]] && patterns+=("*.${ext}")
   done
 fi
 
+# Build excludes list
+excludes=()
+if [[ -n "$exclude" ]]; then
+  IFS=',' read -r -a excludes <<<"$exclude"
+fi
+
 cd "$root" || exit 1
+
+# 2-column header (stdout only)
+if [[ $append -eq 0 ]]; then
+  printf "%7s  %s\n" "lines" "file"
+  printf "%7s  %s\n" "-----" "----"
+fi
 
 git ls-files --cached --others --exclude-standard -- "${patterns[@]}" \
 | sort \
 | while IFS= read -r file; do
-  # Resolve absolute source path (Bash 3 compatible)
   file_abs="$(cd -P -- "$(dirname -- "$file")" && pwd)/$(basename -- "$file")"
 
   # Skip output file itself
   [[ "$file_abs" == "$out_abs" ]] && continue
+
+  # --exclude filter (paths or extensions)
+  if [[ ${#excludes[@]} -gt 0 ]]; then
+    file_rel="${file#./}"
+    file_ext="${file##*.}"
+    skip=0
+    for ex in "${excludes[@]}"; do
+      ex_norm="${ex#./}"
+      if [[ "$ex_norm" =~ ^[A-Za-z0-9]+$ ]]; then
+        [[ "$file_ext" == "$ex_norm" ]] && { skip=1; break; }
+      else
+        [[ "$file_rel" == "$ex_norm" ]] && { skip=1; break; }
+      fi
+    done
+    [[ $skip -eq 1 ]] && continue
+  fi
 
   # --onlyChanged filter (staged or unstaged)
   if [[ $onlyChanged -eq 1 ]] && [[ -z $(git status --porcelain -- "$file") ]]; then
@@ -61,17 +83,18 @@ git ls-files --cached --others --exclude-standard -- "${patterns[@]}" \
     continue
   fi
 
-  echo "$file"
+  # Column line to STDOUT ONLY
+  if lines=$(wc -l < "$file" 2>/dev/null | awk '{print $1}'); then :; else lines=0; fi
+  printf "%7d  %s\n" "$lines" "$file"
+
+  # Markdown output: filename line, then code fence (NO line count)
   echo "$file" >> "$out_abs"
   ext="${file##*.}"
-  if [[ $ext =~ ^js$|^jsx$ ]]; then
-    lang="ts"
-  else
-    lang="$ext"
-  fi
-  echo '```'"$lang" >> "$out_abs"
-  cat "$file" >> "$out_abs"
-  echo '' >> "$out_abs"
-  echo '```' >> "$out_abs"
-  echo >> "$out_abs"
+  if [[ $ext =~ ^js$|^jsx$ ]]; then lang="ts"; else lang="$ext"; fi
+  {
+    echo '```'"$lang"
+    cat "$file"
+    echo '```'
+    echo
+  } >> "$out_abs"
 done
