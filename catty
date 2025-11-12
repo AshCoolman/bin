@@ -1,24 +1,72 @@
 #!/usr/bin/env bash
 # catty — collect source files with gitignore support via ripgrep
-# Usage:
-#   catty [OPTIONS] [--include=PATTERN]... [--exclude=PATTERN]...
 #
-# Options:
-#   --include=PATTERN       Include glob pattern (multiple allowed)
-#   --exclude=PATTERN       Exclude glob pattern (multiple allowed)
-#   --no-gitignore          Don't respect .gitignore (include all files)
+# Collects files from the current directory and outputs them as markdown with code fences.
+# Respects .gitignore by default. Uses ripgrep for fast, safe glob filtering.
+#
+# USAGE:
+#   catty [OPTIONS]
+#
+# FILE SELECTION:
+#   -i, --include=PATTERN   Include glob pattern (multiple allowed; cumulative with OR logic)
+#   -e, --exclude=PATTERN   Exclude glob pattern (multiple allowed; overrides includes)
+#   -f, --filter=FILE       Read patterns from file (gitignore syntax: ! prefix for excludes)
+#
+# OUTPUT OPTIONS:
+#   -o, --out=FILE          Output markdown file (default: catty.gitignored.md)
+#   --append                Append to file instead of overwriting
+#   --print                 Print file paths only, no markdown generation
+#
+# FILTERING OPTIONS:
+#   --no-gitignore          Include .gitignored files (default: respect .gitignore)
 #   --max-lines=N           Skip files with more than N lines
-#   --max-total-lines=N     Exit 1 if total output exceeds N lines
-#   --out=FILE              Output file (default: catty.gitignored.md)
-#   --append                Append to output file instead of overwriting
-#   --print                 Print file list only (no markdown)
-#   --help, -h              Show this help message
+#   --max-total-lines=N     Fail (exit 1) if total output exceeds N lines
+#
+# OTHER:
+#   -h, --help              Show this help message
+#
+# EXAMPLES:
+#   catty -i '*.js' -i '*.ts' --print
+#   catty -i '*.py' -e 'test_*.py' -o output.md
+#   catty -f filters.txt --max-lines=1000
+#
+# FILTER FILE FORMAT (gitignore syntax):
+#   *.js                    (include pattern)
+#   *.ts                    (include pattern)
+#   !node_modules/**        (exclude pattern, ! prefix)
+#   # comments start with #  (ignored)
+#                           (blank lines ignored)
 
 set -euo pipefail
 
 show_help() {
-  sed -n '2,4p;6,15p' "$0" | sed 's/^# //'
+  sed -n '2,38p' "$0" | sed 's/^# //; s/^#$//'
   exit 0
+}
+
+parse_filter_file() {
+  # Parse filter file with gitignore syntax (! prefix for excludes)
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    echo "Error: Filter file not found: $file" >&2
+    exit 1
+  fi
+
+  while IFS= read -r line; do
+    # Skip empty lines and comments
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    # Remove leading/trailing whitespace
+    line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+    if [[ "$line" =~ ^! ]]; then
+      # Exclude pattern (remove ! prefix)
+      excludes+=("${line#!}")
+    else
+      # Include pattern
+      includes+=("$line")
+    fi
+  done < "$file"
 }
 
 # ---------- args ----------
@@ -31,21 +79,28 @@ max_total_lines=""
 declare -a includes
 declare -a excludes
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"
   case "$arg" in
-    --help|-h)            show_help;;
+    -h|--help)            show_help;;
+    -o)                   out="$2"; shift;;
     --out=*)              out="${arg#--out=}";;
+    -i)                   includes+=("$2"); shift;;
+    --include=*)          includes+=("${arg#--include=}");;
+    -e)                   excludes+=("$2"); shift;;
+    --exclude=*)          excludes+=("${arg#--exclude=}");;
+    -f)                   parse_filter_file "$2"; shift;;
+    --filter=*)           parse_filter_file "${arg#--filter=}";;
     --append)             append=1;;
     --print)              printOnly=1;;
     --no-gitignore)       no_gitignore=1;;
-    --include=*)          includes+=("${arg#--include=}");;
-    --exclude=*)          excludes+=("${arg#--exclude=}");;
     --max-lines=*)        max_lines="${arg#--max-lines=}";;
     --max-total-lines=*)  max_total_lines="${arg#--max-total-lines=}";;
     --)                   shift; break;;
     -*)                   echo "Unknown option: $arg" >&2; exit 2;;
     *)                    ;; # Positional args handled separately
   esac
+  shift
 done
 
 # ---------- utils ----------
