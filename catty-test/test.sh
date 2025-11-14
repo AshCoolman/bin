@@ -1,4 +1,5 @@
 #!/bin/bash
+# @hm - this file has a marker
 
 # Run catty with the specified ignore pattern
 /Users/USER/bin/catty --ignore='**/*.md,package-lock.json,!up,!down,!exec,!SKILLS.md,!.gitignore' --print . > output.txt

@@ -21,6 +21,7 @@
 #   --no-gitignore          Include .gitignored files (default: respect .gitignore)
 #   --max-lines=N           Skip files with more than N lines
 #   --max-total-lines=N     Fail (exit 1) if total output exceeds N lines
+#   -m, --marker=PATTERN    Include only files containing marker (multiple allowed; OR logic)
 #
 # OTHER:
 #   -h, --help              Show this help message
@@ -29,6 +30,8 @@
 #   catty -i '*.js' -i '*.ts' --print
 #   catty -i '*.py' -e 'test_*.py' -o output.md
 #   catty -f filters.txt --max-lines=1000
+#   catty -i '*.js' --marker='@important' --print
+#   catty --marker='@hm' --marker='@fixme' -o marked.md
 #
 # FILTER FILE FORMAT (gitignore syntax):
 #   *.js                    (include pattern)
@@ -40,7 +43,7 @@
 set -euo pipefail
 
 show_help() {
-  sed -n '2,38p' "$0" | sed 's/^# //; s/^#$//'
+  sed -n '2,42p' "$0" | sed 's/^# //; s/^#$//'
   exit 0
 }
 
@@ -69,6 +72,26 @@ parse_filter_file() {
   done < "$file"
 }
 
+has_marker() {
+  # Check if file contains any of the marker patterns
+  local file="$1"
+
+  # If no markers specified, include file
+  if (( ${#markers[@]} == 0 )); then
+    return 0
+  fi
+
+  # Check if file contains any marker (OR logic) - use literal matching
+  for marker in "${markers[@]}"; do
+    # Use rg with --fixed-strings for literal matching (no regex interpretation)
+    if rg --quiet --fixed-strings "$marker" "$file" 2>/dev/null; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # ---------- args ----------
 out="catty.gitignored.md"
 append=0
@@ -78,6 +101,7 @@ max_lines=""
 max_total_lines=""
 declare -a includes
 declare -a excludes
+declare -a markers
 
 while [[ $# -gt 0 ]]; do
   arg="$1"
@@ -91,6 +115,8 @@ while [[ $# -gt 0 ]]; do
     --exclude=*)          excludes+=("${arg#--exclude=}");;
     -f)                   parse_filter_file "$2"; shift;;
     --filter=*)           parse_filter_file "${arg#--filter=}";;
+    -m)                   markers+=("$2"); shift;;
+    --marker=*)           markers+=("${arg#--marker=}");;
     --append)             append=1;;
     --print)              printOnly=1;;
     --no-gitignore)       no_gitignore=1;;
@@ -213,6 +239,11 @@ fi
         continue
       fi
 
+      # skip if doesn't contain marker
+      if ! has_marker "$file"; then
+        continue
+      fi
+
       printf "%s\n" "$file"
     done
     exit 0
@@ -245,6 +276,11 @@ fi
 
     # skip if exceeds max-lines
     if [[ -n "$max_lines" ]] && (( lines > max_lines )); then
+      continue
+    fi
+
+    # skip if doesn't contain marker
+    if ! has_marker "$file"; then
       continue
     fi
 
