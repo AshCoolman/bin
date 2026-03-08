@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+err(){ printf "ERROR: %s\n" "$*" >&2; exit 1; }
+need(){ command -v "$1" >/dev/null 2>&1 || err "Missing dependency: $1"; }
+
+usage() {
+  cat <<'EOF'
+Usage: compress_video_dir <dir> <percent> [speed] [--match]
+
+Examples:
+  compress_video_dir ./videos 10%
+  compress_video_dir ./videos 10% 1.25 --match
+EOF
+}
+
+need bc
+need awk
+
+MATCH=0
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --match) MATCH=1;;
+    --help|-h) usage; exit 0;;
+    *) POSITIONAL+=("$arg");;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  usage
+  exit 1
+fi
+
+DIR="$1"
+PERCENT_RAW="${2%\%}"
+SPEED="${3:-}"
+
+[[ -d "$DIR" ]] || err "Dir not found: $DIR"
+[[ "$PERCENT_RAW" =~ ^[0-9]+([.][0-9]+)?$ ]] || err "percent must be a number like 10 or 10%"
+(( $(echo "$PERCENT_RAW > 0" | bc -l) )) || err "percent must be > 0"
+PERCENT="$PERCENT_RAW"
+
+if [[ -n "${SPEED:-}" ]]; then
+  [[ "$SPEED" =~ ^[0-9]+([.][0-9]+)?$ ]] || err "speed must be a number"
+  (( $(echo "$SPEED > 0" | bc -l) )) || err "speed must be > 0"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPRESS_VIDEO="$SCRIPT_DIR/compress_video"
+[[ -x "$COMPRESS_VIDEO" ]] || err "compress_video not found or not executable: $COMPRESS_VIDEO"
+
+file_size_bytes() {
+  local f="$1"
+  local bytes=""
+  if bytes=$(stat -f%z "$f" 2>/dev/null); then
+    printf '%s' "$bytes"
+    return 0
+  fi
+  if bytes=$(stat -c%s "$f" 2>/dev/null); then
+    printf '%s' "$bytes"
+    return 0
+  fi
+  err "stat failed for: $f"
+}
+
+is_video_ext() {
+  local ext="${1##*.}"
+  [[ "$ext" == "$1" ]] && return 1
+  ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+  case "$ext" in
+    mp4|mov|mkv|avi|m4v|webm) return 0;;
+    *) return 1;;
+  esac
+}
+
+is_compressed_output() {
+  local base
+  base="$(basename "$1")"
+  [[ "$base" =~ _max[0-9]+([.][0-9]+)?MB_[0-9]+([.][0-9]+)?x(_match)?\.mp4$ ]]
+}
+
+shopt -s nullglob
+VIDEOS=()
+for f in "$DIR"/*; do
+  [[ -f "$f" ]] || continue
+  is_video_ext "$f" || continue
+  VIDEOS+=("$f")
+done
+shopt -u nullglob
+
+[[ ${#VIDEOS[@]} -gt 0 ]] || err "No videos found in $DIR"
+
+SELECTED=()
+for f in "${VIDEOS[@]}"; do
+  if is_compressed_output "$f"; then
+    SELECTED+=("0")
+  else
+    SELECTED+=("1")
+  fi
+done
+
+print_menu() {
+  echo "Select videos to compress (toggle by number, Enter to continue):"
+  for i in "${!VIDEOS[@]}"; do
+    local idx=$((i + 1))
+    local mark="[ ]"
+    [[ "${SELECTED[i]}" -eq 1 ]] && mark="[x]"
+    printf " %2d %s %s\n" "$idx" "$mark" "$(basename "${VIDEOS[i]}")"
+  done
+  echo "Commands: numbers to toggle, 'a' = all, 'n' = none, 'q' = quit"
+}
+
+while true; do
+  print_menu
+  read -r -p "> " input || exit 1
+  input="${input//,/ }"
+  [[ -z "$input" ]] && break
+  case "$input" in
+    q|quit) exit 0;;
+    a|all)
+      for i in "${!SELECTED[@]}"; do SELECTED[i]=1; done
+      continue
+      ;;
+    n|none)
+      for i in "${!SELECTED[@]}"; do SELECTED[i]=0; done
+      continue
+      ;;
+  esac
+  for tok in $input; do
+    if [[ "$tok" =~ ^[0-9]+$ ]]; then
+      if (( tok >= 1 && tok <= ${#VIDEOS[@]} )); then
+        i=$((tok - 1))
+        if [[ "${SELECTED[i]}" -eq 1 ]]; then
+          SELECTED[i]=0
+        else
+          SELECTED[i]=1
+        fi
+      else
+        printf "Out of range: %s\n" "$tok" >&2
+      fi
+    else
+      printf "Invalid input: %s\n" "$tok" >&2
+    fi
+  done
+done
+
+TO_PROCESS=()
+for i in "${!VIDEOS[@]}"; do
+  [[ "${SELECTED[i]}" -eq 1 ]] && TO_PROCESS+=("${VIDEOS[i]}")
+done
+
+if [[ ${#TO_PROCESS[@]} -eq 0 ]]; then
+  echo "No videos selected; exiting."
+  exit 0
+fi
+
+for f in "${TO_PROCESS[@]}"; do
+  bytes="$(file_size_bytes "$f")"
+  size_mb="$(echo "$bytes/1024/1024" | bc -l | awk '{printf "%.3f",$0}')"
+  target_mb="$(echo "$size_mb * $PERCENT / 100" | bc -l | awk '{printf "%.3f",$0}')"
+  echo "Compressing $(basename "$f") -> ${target_mb}MB (${PERCENT}%)"
+  if [[ -n "${SPEED:-}" ]]; then
+    if [[ "$MATCH" -eq 1 ]]; then
+      "$COMPRESS_VIDEO" --match "$f" "$target_mb" "$SPEED"
+    else
+      "$COMPRESS_VIDEO" "$f" "$target_mb" "$SPEED"
+    fi
+  else
+    if [[ "$MATCH" -eq 1 ]]; then
+      "$COMPRESS_VIDEO" --match "$f" "$target_mb"
+    else
+      "$COMPRESS_VIDEO" "$f" "$target_mb"
+    fi
+  fi
+done
