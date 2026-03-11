@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PATTERN='apiUrl'
+CTX=5
+
+git log --all -G"$PATTERN" --format='%H' |
+while IFS= read -r sha; do
+  header="$(git show -s --date=short --format='%H %ad %an' "$sha")"
+  matched_any=0
+
+  git show --name-only --pretty=format: "$sha" | sed '/^$/d' |
+  while IFS= read -r file; do
+    case "$file" in
+      *.js|*.jsx|*.ts|*.tsx) ;;
+      *) continue ;;
+    esac
+
+    if git show -U"$CTX" --pretty=format: "$sha" -- "$file" | grep -Eq "^[+-].*${PATTERN}"; then
+      if [ "$matched_any" -eq 0 ]; then
+        printf '%s\n' "$header"
+        matched_any=1
+      fi
+
+      printf '%s\n' "$file"
+
+      if command -v rg >/dev/null 2>&1; then
+        git show -U"$CTX" --pretty=format: "$sha" -- "$file" | rg -n -C "$CTX" "^[+-].*${PATTERN}"
+      else
+        git show -U"$CTX" --pretty=format: "$sha" -- "$file" | grep -n -C "$CTX" -E "^[+-].*${PATTERN}"
+      fi
+
+      printf '\n\n'
+    fi
+  done
+done
