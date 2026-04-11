@@ -1,0 +1,14 @@
+{
+  "name": "@catlens/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.2",
+    "ignore": "^6.0.2",
+    "simple-git": "^3.27.0"
+  }
+}

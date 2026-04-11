@@ -1,0 +1,13 @@
+{
+  "name": "@catlens/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "catlens": "./src/index.ts"
+  },
+  "dependencies": {
+    "@catlens/core": "*",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1"
+  }
+}
