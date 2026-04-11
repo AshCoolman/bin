@@ -11,6 +11,18 @@ export default defineConfig({
     include: ['packages/*/src/**/*.test.ts', 'test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
+      include: ['packages/*/src/**/*.ts'],
+      exclude: [
+        'packages/*/src/**/*.test.ts',
+        'packages/core/src/query/ast.ts',
+        'packages/core/src/query/result.ts',
+        'packages/core/src/lenses/types.ts',
+        'packages/cli/src/index.ts',
+      ],
+      thresholds: {
+        statements: 95,
+        branches: 95,
+      },
     },
   },
 })
