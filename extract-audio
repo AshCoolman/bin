@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  extract-audio.sh INPUT.mov [options]
+  extract-audio.sh help
+
+Description:
+  Extract audio from a media file.
+  Default output is INPUT.mp4
+
+Default behaviour:
+  - Tries stream copy first:
+      ffmpeg -i INPUT -vn -c:a copy INPUT.mp4
+  - Fast, no quality loss, but only works when the source audio codec is valid in mp4.
+
+Options:
+  --out FILE           Explicit output file path
+  --container EXT      Output container/extension (default: mp4)
+  --codec CODEC        Re-encode audio with codec, e.g. aac, libmp3lame, flac
+  --bitrate RATE       Audio bitrate for re-encode, e.g. 192k, 256k
+  --quality N          Codec quality setting where applicable, e.g. for libmp3lame: 0..9
+  --channels N         Force channel count, e.g. 1 or 2
+  --sample-rate N      Force sample rate, e.g. 44100 or 48000
+  --overwrite          Overwrite output if it exists
+  --keep-video-ext     Use source file extension for output base name only; no effect on default output naming
+  -h, --help           Show help
+
+Examples:
+  extract-audio.sh input.mov
+  extract-audio.sh input.mov --out input.m4a
+  extract-audio.sh input.mov --container m4a
+  extract-audio.sh input.mov --codec aac --bitrate 192k
+  extract-audio.sh input.mov --codec libmp3lame --quality 2 --container mp3
+  extract-audio.sh help
+
+Notes:
+  - Default output is INPUT.mp4 because you asked for that, but m4a is usually the more normal container for audio-only AAC/ALAC.
+  - If you use --codec, audio is re-encoded.
+  - If you do not use --codec, the script uses -c:a copy.
+EOF
+}
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+  fi
+
+  case "${1:-}" in
+    help|-h|--help)
+      usage
+      exit 0
+      ;;
+  esac
+
+  need_cmd ffmpeg
+
+  local input="$1"
+  shift
+
+  [[ -f "$input" ]] || fail "Input file not found: $input"
+
+  local overwrite_flag="-n"
+  local codec=""
+  local bitrate=""
+  local quality=""
+  local channels=""
+  local sample_rate=""
+  local out=""
+  local container="mp4"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        [[ $# -ge 2 ]] || fail "--out requires a value"
+        out="$2"
+        shift 2
+        ;;
+      --container)
+        [[ $# -ge 2 ]] || fail "--container requires a value"
+        container="${2#.}"
+        shift 2
+        ;;
+      --codec)
+        [[ $# -ge 2 ]] || fail "--codec requires a value"
+        codec="$2"
+        shift 2
+        ;;
+      --bitrate)
+        [[ $# -ge 2 ]] || fail "--bitrate requires a value"
+        bitrate="$2"
+        shift 2
+        ;;
+      --quality)
+        [[ $# -ge 2 ]] || fail "--quality requires a value"
+        quality="$2"
+        shift 2
+        ;;
+      --channels)
+        [[ $# -ge 2 ]] || fail "--channels requires a value"
+        channels="$2"
+        shift 2
+        ;;
+      --sample-rate)
+        [[ $# -ge 2 ]] || fail "--sample-rate requires a value"
+        sample_rate="$2"
+        shift 2
+        ;;
+      --overwrite)
+        overwrite_flag="-y"
+        shift
+        ;;
+      --keep-video-ext)
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown argument: $1"
+        ;;
+    esac
+  done
+
+  local base="${input%.*}"
+
+  if [[ -z "$out" ]]; then
+    out="${base}.${container}"
+  fi
+
+  local -a cmd
+  cmd=(ffmpeg "$overwrite_flag" -i "$input" -vn)
+
+  if [[ -n "$codec" ]]; then
+    cmd+=(-c:a "$codec")
+    [[ -n "$bitrate" ]] && cmd+=(-b:a "$bitrate")
+    [[ -n "$quality" ]] && cmd+=(-q:a "$quality")
+  else
+    cmd+=(-c:a copy)
+    [[ -n "$bitrate" ]] && fail "--bitrate requires --codec"
+    [[ -n "$quality" ]] && fail "--quality requires --codec"
+  fi
+
+  [[ -n "$channels" ]] && cmd+=(-ac "$channels")
+  [[ -n "$sample_rate" ]] && cmd+=(-ar "$sample_rate")
+
+  cmd+=("$out")
+
+  printf 'Running:'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
+
+  "${cmd[@]}"
+
+  printf 'Wrote: %s\n' "$out"
+}
+
+main "$@"

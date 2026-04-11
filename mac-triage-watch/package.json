@@ -1,0 +1,11 @@
+{
+  "name": "mac-triage-watch",
+  "private": true,
+  "scripts": {
+    "test": "jest",
+    "watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^29"
+  }
+}
