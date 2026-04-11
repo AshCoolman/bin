@@ -188,6 +188,9 @@ class Parser {
       case 'tag':
         node = this.parseTag()
         break
+      case 'tagged_section':
+        node = this.parseTaggedSection()
+        break
       case 'authored_by':
         node = this.parseAuthoredBy()
         break
@@ -293,6 +296,21 @@ class Parser {
     }
     this.expect('rparen')
     return { type: 'tag', tag: tag.value, scope }
+  }
+
+  private parseTaggedSection(): import('./ast.js').TaggedSectionPredicate {
+    const openTag = this.expectString()
+    let closeTag: string | undefined
+    if (this.peek().type === 'comma') {
+      this.consume()
+      closeTag = this.expectString().value
+    }
+    this.expect('rparen')
+    return {
+      type: 'tagged_section',
+      openTag: openTag.value,
+      ...(closeTag !== undefined ? { closeTag } : {}),
+    }
   }
 
   private parseAuthoredBy(): AuthoredByPredicate {

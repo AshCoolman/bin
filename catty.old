@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# catty — collect source files with gitignore support via ripgrep
+#
+# Collects files from the current directory and outputs them as markdown with code fences.
+# Respects .gitignore by default. Uses ripgrep for fast, safe glob filtering.
+#
+# USAGE:
+#   catty [OPTIONS]
+#
+# FILE SELECTION:
+#   -i, --include=PATTERN   Include glob pattern (multiple allowed; cumulative with OR logic)
+#   -e, --exclude=PATTERN   Exclude glob pattern (multiple allowed; overrides includes)
+#   -f, --filter=FILE       Read patterns from file (gitignore syntax: ! prefix for excludes)
+#
+# OUTPUT OPTIONS:
+#   -o, --out=FILE          Output markdown file (default: catty.gitignored.md)
+#   --append                Append to file instead of overwriting
+#   --print                 Print file paths only, no markdown generation
+#
+# FILTERING OPTIONS:
+#   --no-gitignore          Include .gitignored files (default: respect .gitignore)
+#   --max-lines=N           Skip files with more than N lines
+#   --max-total-lines=N     Fail (exit 1) if total output exceeds N lines
+#   -m, --marker=PATTERN    Include only files containing marker (multiple allowed; OR logic)
+#
+# OTHER:
+#   -h, --help              Show this help message
+#
+# EXAMPLES:
+#   catty -i '*.js' -i '*.ts' --print
+#   catty -i '*.py' -e 'test_*.py' -o output.md
+#   catty -f filters.txt --max-lines=1000
+#   catty -i '*.js' --marker='@important' --print
+#   catty --marker='@hm' --marker='@fixme' -o marked.md
+#
+# FILTER FILE FORMAT (gitignore syntax):
+#   *.js                    (include pattern)
+#   *.ts                    (include pattern)
+#   !node_modules/**        (exclude pattern, ! prefix)
+#   # comments start with #  (ignored)
+#                           (blank lines ignored)
+
+set -euo pipefail
+
+show_help() {
+  sed -n '2,42p' "$0" | sed 's/^# //; s/^#$//'
+  exit 0
+}
+
+parse_filter_file() {
+  # Parse filter file with gitignore syntax (! prefix for excludes)
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    echo "Error: Filter file not found: $file" >&2
+    exit 1
+  fi
+
+  while IFS= read -r line; do
+    # Skip empty lines and comments
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    # Remove leading/trailing whitespace
+    line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+    if [[ "$line" =~ ^! ]]; then
+      # Exclude pattern (remove ! prefix)
+      excludes+=("${line#!}")
+    else
+      # Include pattern
+      includes+=("$line")
+    fi
+  done < "$file"
+}
+
+has_marker() {
+  # Check if file contains any of the marker patterns
+  local file="$1"
+
+  # If no markers specified, include file
+  if (( ${#markers[@]} == 0 )); then
+    return 0
+  fi
+
+  # Check if file contains any marker (OR logic) - use literal matching
+  for marker in "${markers[@]}"; do
+    # Use rg with --fixed-strings for literal matching (no regex interpretation)
+    if rg --quiet --fixed-strings "$marker" "$file" 2>/dev/null; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# ---------- args ----------
+out="catty.gitignored.md"
+append=0
+printOnly=0
+no_gitignore=0
+max_lines=""
+max_total_lines=""
+declare -a includes
+declare -a excludes
+declare -a markers
+
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  case "$arg" in
+    -h|--help)            show_help;;
+    -o)                   out="$2"; shift;;
+    --out=*)              out="${arg#--out=}";;
+    -i)                   includes+=("$2"); shift;;
+    --include=*)          includes+=("${arg#--include=}");;
+    -e)                   excludes+=("$2"); shift;;
+    --exclude=*)          excludes+=("${arg#--exclude=}");;
+    -f)                   parse_filter_file "$2"; shift;;
+    --filter=*)           parse_filter_file "${arg#--filter=}";;
+    -m)                   markers+=("$2"); shift;;
+    --marker=*)           markers+=("${arg#--marker=}");;
+    --append)             append=1;;
+    --print)              printOnly=1;;
+    --no-gitignore)       no_gitignore=1;;
+    --max-lines=*)        max_lines="${arg#--max-lines=}";;
+    --max-total-lines=*)  max_total_lines="${arg#--max-total-lines=}";;
+    --)                   shift; break;;
+    -*)                   echo "Unknown option: $arg" >&2; exit 2;;
+    *)                    ;; # Positional args handled separately
+  esac
+  shift
+done
+
+# ---------- utils ----------
+pad_left() { # $1=str $2=width
+  local s=""
+  if [[ -n "$1" ]]; then
+    s="$1"
+  fi
+  local n="$2" len=${#s}
+  (( len >= n )) && { printf "%s" "$s"; return; }
+  printf "%*s%s" $((n-len)) "" "$s"
+}
+ext_to_lang() { # $1=path
+  local e
+  if [[ -z "$1" ]]; then
+    printf ""
+    return
+  fi
+  e=$(printf "%s" "${1##*.}" | tr '[:upper:]' '[:lower:]')
+  case "$e" in
+    js|jsx|ts|tsx) printf "ts" ;;
+    yml)           printf "yaml" ;;
+    sh)            printf "bash" ;;
+    *)             printf "%s" "$e" ;;
+  esac
+}
+mktemp_compat() { local t; t=$(mktemp -t allsrc.XXXXXX 2>/dev/null || mktemp); printf "%s" "$t"; }
+resolve_self() {
+  local src="${BASH_SOURCE[0]}"; [[ "$src" = /* ]] || src="$PWD/$src"
+  local dir; dir="$(cd -P -- "$(dirname -- "$src")" && pwd)"; printf "%s/%s" "$dir" "$(basename -- "$src")"
+}
+
+build_rg_command() {
+  # Build rg --files command with all filters
+  # Use '.' as pattern to match all files (required by rg even in --files mode)
+  local -a cmd=("rg" "--files" "--sort=path" ".")
+
+  # Add include globs
+  if (( ${#includes[@]} > 0 )); then
+    local pattern
+    for pattern in "${includes[@]}"; do
+      cmd+=("--glob=$pattern")
+    done
+  fi
+
+  # Add exclude globs
+  if (( ${#excludes[@]} > 0 )); then
+    local pattern
+    for pattern in "${excludes[@]}"; do
+      cmd+=("--glob=!$pattern")
+    done
+  fi
+
+  # Add no-ignore flag if requested
+  if (( no_gitignore )); then
+    cmd+=("--no-ignore")
+  fi
+
+  # Print the command array
+  printf "%s\n" "${cmd[@]}"
+}
+
+# ---------- main ----------
+
+
+
+# Build rg command array
+declare -a rg_args=(rg --files --sort=path .)
+
+# Add include globs
+if (( ${#includes[@]} > 0 )); then
+  for pattern in "${includes[@]}"; do
+    rg_args+=(--glob="$pattern")
+  done
+fi
+
+# Add exclude globs
+if (( ${#excludes[@]} > 0 )); then
+  for pattern in "${excludes[@]}"; do
+    rg_args+=(--glob="!$pattern")
+  done
+fi
+
+# Add no-ignore flag
+if (( no_gitignore )); then
+  rg_args+=(--no-ignore)
+fi
+
+# Determine output file path
+if [[ "$out" = /* ]]; then
+  out_abs="$out"
+else
+  out_abs="$(cd -P . && pwd)/$out"
+fi
+
+# Execute rg and pipe results
+"${rg_args[@]}" | {
+  # Print-only mode (for piping/fzf)
+  if (( printOnly )); then
+    while IFS= read -r file; do
+      # skip output file itself
+      if [[ "$(cd -P -- "$(dirname -- "$file")" && pwd)/$(basename -- "$file")" == "$out_abs" ]]; then
+        continue
+      fi
+
+      # skip if exceeds max-lines
+      lines=0
+      if lc=$(wc -l < "$file" 2>/dev/null | awk '{print $1}'); then lines="$lc"; fi
+      if [[ -n "$max_lines" ]] && (( lines > max_lines )); then
+        continue
+      fi
+
+      # skip if doesn't contain marker
+      if ! has_marker "$file"; then
+        continue
+      fi
+
+      printf "%s\n" "$file"
+    done
+    exit 0
+  fi
+
+  # Emit markdown
+  (( append == 0 )) && : > "$out_abs"
+
+  # Header to stdout
+  if (( append == 0 )); then
+    printf "%s  %s\n" "$(pad_left lines 7)" "file"
+    printf "%s  %s\n" "$(pad_left ----- 7)" "----"
+  fi
+
+  total_lines=0
+
+  while IFS= read -r file; do
+    if [[ -z "$file" ]]; then
+      continue
+    fi
+
+    # skip output file itself
+    if [[ "$(cd -P -- "$(dirname -- "$file")" && pwd)/$(basename -- "$file")" == "$out_abs" ]]; then
+      continue
+    fi
+
+    # line count
+    lines=0
+    if lc=$(wc -l < "$file" 2>/dev/null | awk '{print $1}'); then lines="$lc"; fi
+
+    # skip if exceeds max-lines
+    if [[ -n "$max_lines" ]] && (( lines > max_lines )); then
+      continue
+    fi
+
+    # skip if doesn't contain marker
+    if ! has_marker "$file"; then
+      continue
+    fi
+
+    printf "%s  %s\n" "$(pad_left "$lines" 7)" "$file"
+    (( total_lines += lines ))
+
+    # markdown
+    echo "$file" >> "$out_abs"
+    lang="$(ext_to_lang "$file")"
+    {
+      echo '```'"$lang"
+      cat "$file" 2>/dev/null || true
+      echo '```'
+      echo
+    } >> "$out_abs"
+  done
+
+  # Check if total lines exceed max-total-lines
+  if [[ -n "$max_total_lines" ]] && (( total_lines > max_total_lines )); then
+    echo "Error: Total lines ($total_lines) exceeds max-total-lines ($max_total_lines)" >&2
+    exit 1
+  fi
+}

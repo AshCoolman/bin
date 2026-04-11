@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { FileFacts } from '../query/result.js'
 
@@ -25,8 +25,12 @@ async function collectFileFacts(
   const ext = path.extname(relativePath).replace(/^\./, '')
 
   let content: string
+  let mtime: Date
   try {
-    content = await readFile(absolutePath, 'utf8')
+    ;[content, { mtime }] = await Promise.all([
+      readFile(absolutePath, 'utf8'),
+      stat(absolutePath),
+    ])
   } catch {
     return null
   }
@@ -38,5 +42,6 @@ async function collectFileFacts(
     content,
     lineCount,
     extension: ext,
+    mtime,
   }
 }

@@ -54,6 +54,7 @@ export type FileFacts = {
   readonly content: string
   readonly lineCount: number
   readonly extension: string
+  readonly mtime: Date
   readonly gitFacts?: GitFacts
 }
 

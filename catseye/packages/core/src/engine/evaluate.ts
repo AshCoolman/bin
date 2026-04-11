@@ -1,28 +1,38 @@
 import type { SelectionNode, PredicateNode } from '../query/ast.js'
-import type { FileFacts, Reason } from '../query/result.js'
+import type { FileFacts, SectionHit, Reason } from '../query/result.js'
 import { evalExt } from './predicates/ext.js'
 import { evalKeyword } from './predicates/keyword.js'
 import { evalFile } from './predicates/file.js'
+import { evalGlob } from './predicates/glob.js'
+import { evalTag } from './predicates/tag.js'
+import { evalTaggedSection } from './predicates/tagged-section.js'
+import { evalAuthoredBy } from './predicates/authored-by.js'
+import { evalOlderThan, evalNewerThan } from './predicates/age.js'
+import { evalDiff } from './predicates/diff.js'
+import { evalCommitMessage } from './predicates/commit-message.js'
 
 export type EvalResult = {
   readonly matched: boolean
   readonly reasons: readonly Reason[]
+  readonly sections?: readonly SectionHit[]
 }
 
 /**
  * Evaluate a SelectionNode against FileFacts.
- * Returns whether the file matches and the reasons why.
+ * Returns whether the file matches, the reasons why, and any section hits.
  */
 export function evaluate(node: SelectionNode, facts: FileFacts): EvalResult {
   switch (node.type) {
     case 'and': {
       const allReasons: Reason[] = []
+      const allSections: SectionHit[] = []
       for (const child of node.children) {
         const r = evaluate(child, facts)
         if (!r.matched) return { matched: false, reasons: [] }
         allReasons.push(...r.reasons)
+        if (r.sections) allSections.push(...r.sections)
       }
-      return { matched: true, reasons: allReasons }
+      return { matched: true, reasons: allReasons, sections: allSections }
     }
 
     case 'or': {
@@ -52,32 +62,51 @@ export function evaluate(node: SelectionNode, facts: FileFacts): EvalResult {
 }
 
 function evaluatePredicate(predicate: PredicateNode, facts: FileFacts): EvalResult {
-  let reason: Reason | null = null
-
   switch (predicate.type) {
-    case 'ext':
-      reason = evalExt(predicate, facts)
-      break
-    case 'keyword':
-      reason = evalKeyword(predicate, facts)
-      break
-    case 'file':
-      reason = evalFile(predicate, facts)
-      break
-    case 'glob':
-    case 'tag':
-    case 'tagged_section':
-    case 'diff':
-    case 'commit_message':
-    case 'authored_by':
-    case 'older_than':
-    case 'newer_than':
-      // Unimplemented predicates return no match (Phase 7)
-      return { matched: false, reasons: [] }
+    case 'ext': {
+      const r = evalExt(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'keyword': {
+      const r = evalKeyword(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'file': {
+      const r = evalFile(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'glob': {
+      const r = evalGlob(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'tag': {
+      const r = evalTag(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'tagged_section': {
+      const r = evalTaggedSection(predicate, facts)
+      if (!r.matched) return { matched: false, reasons: [] }
+      return { matched: true, reasons: r.reason ? [r.reason] : [], sections: r.sections }
+    }
+    case 'authored_by': {
+      const r = evalAuthoredBy(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'older_than': {
+      const r = evalOlderThan(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'newer_than': {
+      const r = evalNewerThan(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'diff': {
+      const r = evalDiff(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
+    case 'commit_message': {
+      const r = evalCommitMessage(predicate, facts)
+      return r ? { matched: true, reasons: [r] } : { matched: false, reasons: [] }
+    }
   }
-
-  if (reason !== null) {
-    return { matched: true, reasons: [reason] }
-  }
-  return { matched: false, reasons: [] }
 }
