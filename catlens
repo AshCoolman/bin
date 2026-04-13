@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CATLENS="$(cd "$(dirname "$(realpath "$0")")/catlens-lib" && pwd)"
+
+# Install if node_modules missing or package-lock.json is newer than node_modules
+if [[ ! -x "$CATLENS/node_modules/.bin/tsx" ]] || \
+   [[ "$CATLENS/package-lock.json" -nt "$CATLENS/node_modules" ]]; then
+  echo "catty: installing dependencies..." >&2
+  npm install --prefix "$CATLENS" --silent
+  touch "$CATLENS/node_modules"
+fi
+
+exec env CATLENS_DIR="$CATLENS" "$CATLENS/node_modules/.bin/tsx" "$CATLENS/packages/cli/src/index.ts" "$@"

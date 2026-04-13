@@ -21,12 +21,14 @@ export function renderPreview(
   )
 
   if (files.length > 0) {
+    const maxPathLen = Math.max(...files.map(f => f.path.length))
+    const col = maxPathLen + 4
     lines.push('')
     for (const file of files) {
       const reasonStr = options.showReasons && file.reasons.length > 0
         ? `  [${file.reasons.map(r => r.detail ?? r.predicate).join(', ')}]`
         : ''
-      lines.push(`  ${file.path.padEnd(50)} (${file.lineCount} lines)${reasonStr}`)
+      lines.push(`  ${file.path.padEnd(col)}(${file.lineCount} lines)${reasonStr}`)
     }
   }
 

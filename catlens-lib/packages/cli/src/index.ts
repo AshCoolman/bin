@@ -22,6 +22,7 @@ import {
 } from '@catlens/core'
 import type { RenderFormat, Lens } from '@catlens/core'
 import { resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const LARGE_RESULT_THRESHOLD = 200_000 // chars
@@ -49,6 +50,7 @@ Operators:  and  or  not  unless`)
 // ── Main query command ────────────────────────────────────────────────────
 
 program
+  .argument('[root-or-query]', 'Repo root path, or DSL query / saved lens name')
   .argument('[query]', 'DSL query string or saved lens name')
   .option('-p, --preview', 'Preview matched files without rendering')
   .option('-o, --output <format>', 'Output format: markdown, file-list, json, snippets, diff', 'markdown')
@@ -58,7 +60,8 @@ program
   .option('--force', 'Bypass large-result threshold warning')
   .option('--save <name>', 'Save query as a named lens after running')
   .option('--explain', 'Print inclusion reasons for each file after render')
-  .action(async (queryArg: string | undefined, opts: {
+  .option('--agents', 'Print .catlens/AGENTS.md for the current repo')
+  .action(async (firstArg: string | undefined, secondArg: string | undefined, opts: {
     preview: boolean
     output: string
     root: string
@@ -67,13 +70,38 @@ program
     force: boolean
     save?: string
     explain?: boolean
+    agents?: boolean
   }) => {
+    if (opts.agents) {
+      const agentsPath = resolve(process.env.CATLENS_DIR ?? '', 'AGENTS.md')
+      try {
+        const content = await readFile(agentsPath, 'utf8')
+        console.log(content)
+      } catch {
+        console.error(pc.red(`No AGENTS.md found at ${agentsPath}`))
+        process.exit(1)
+      }
+      return
+    }
+
+    // Resolve positional args: optional [root] [query] or just [query]
+    let queryArg: string | undefined
+    let repoRoot: string
+    if (secondArg !== undefined) {
+      repoRoot = resolve(firstArg!)
+      queryArg = secondArg
+    } else if (firstArg !== undefined && /^[./~]/.test(firstArg)) {
+      repoRoot = resolve(firstArg)
+      queryArg = undefined
+    } else {
+      repoRoot = resolve(opts.root)
+      queryArg = firstArg
+    }
+
     if (!queryArg) {
       program.help()
       return
     }
-
-    const repoRoot = resolve(opts.root)
 
     // Resolve: is this a lens name, DSL string, or ambiguous prefix?
     let query
