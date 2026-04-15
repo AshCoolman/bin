@@ -10,7 +10,7 @@ Write a query, get back only the files (or sections) that matter — as a markdo
 
 ```bash
 npm install
-npx tsx packages/cli/src/index.ts 'and(ext(ts), keyword("checkout"))' --preview
+npx tsx packages/cli/src/index.ts 'ext:ts && keyword:checkout' --preview
 ```
 
 No build step required. `tsx` runs TypeScript directly.
@@ -19,32 +19,30 @@ No build step required. `tsx` runs TypeScript directly.
 
 ## Query syntax
 
-Queries are function-call style. Operators compose predicates.
+Queries are `key:value` predicates composed with infix operators.
 
 ### Predicates
 
 | Predicate | Matches |
 |-----------|---------|
-| `ext(ts, tsx)` | Files with these extensions |
-| `keyword("term")` | Files containing the substring (case-insensitive) |
-| `file("src/api.ts")` | Exact file path(s) |
-| `glob("src/**/*.ts")` | Files matching a glob pattern |
-| `tag("@catty:api")` | Files containing the tag string |
-| `tag("@catty:api", file)` | Tag in first 10 lines only |
-| `tagged_section("catty:start", "catty:end")` | Extracts content between markers |
-| `diff()` | Files in the current working diff |
-| `authored_by("ashley")` | Files last committed by this author |
-| `older_than("30d")` | Files not committed in 30 days (`d` `w` `m` `y`) |
-| `newer_than("7d")` | Files committed within 7 days |
-| `commit_message("fix")` | Files whose last commit message contains the term |
+| `ext:ts,tsx` | Files with these extensions |
+| `keyword:term` or `keyword:"multi word"` | Files containing the substring (case-insensitive) |
+| `file:src/api.ts` | Exact file path (comma-sep for multiple) |
+| `path:src/**/*.ts` | Files matching a glob pattern |
+| `*diff:` / `*diff:HEAD~3` | Files in the working diff, or vs ref |
+| `*older:30d` | Files not committed in 30 days (`d` `w` `m` `y`) |
+| `*newer:7d` | Files committed within 7 days |
+
+`*` = slow: shells out to git per query.
 
 ### Operators
 
 ```
-and(ext(ts), keyword("checkout"))   — all must match
-or(ext(ts), ext(tsx))               — any must match
-not(keyword("test"))                — exclude matches
-ext(ts) unless(keyword("test"))     — subtract exclusion from selection
+ext:ts && keyword:checkout    — all must match
+ext:ts || ext:tsx             — any must match
+!keyword:test                 — exclude matches
+ext:ts && !keyword:test       — subtract exclusion from selection
+(a || b) && c                 — grouping; && binds tighter than ||
 ```
 
 ---
@@ -53,25 +51,25 @@ ext(ts) unless(keyword("test"))     — subtract exclusion from selection
 
 ```bash
 # Preview matched files (no content output)
-catlens 'and(ext(ts), keyword("checkout"))' --preview
+catlens 'ext:ts && keyword:checkout' --preview
 
 # Render as markdown bundle
-catlens 'and(ext(ts), keyword("checkout"))'
+catlens 'ext:ts && keyword:checkout'
 
 # Only files in the current diff
-catlens 'diff()' --preview
-
-# Recent commits by a specific author
-catlens 'and(authored_by("ashley"), newer_than("14d"))' --preview
+catlens 'diff:' --preview
 
 # Exclude test files
-catlens 'ext(ts) unless(keyword(".test."))' --output file-list
+catlens 'ext:ts && !path:**/*.test.*' --output file-list
 
 # Files changed since last week in src/
-catlens 'and(glob("src/**/*.ts"), newer_than("7d"))' --preview
+catlens 'path:src/**/*.ts && newer:7d' --preview
 
 # Point at any repo
-catlens 'and(ext(ts), keyword("TODO"))' --root ~/projects/myapp --preview
+catlens ~/projects/myapp 'ext:ts && keyword:TODO' --preview
+
+# Different filters per directory
+catlens ./src 'ext:ts,md' ./src/mocks '!ext:md'
 ```
 
 ---
@@ -82,7 +80,7 @@ Save a useful query as a named lens, then rerun it by name.
 
 ```bash
 # Save
-catlens 'and(ext(ts), keyword("checkout"))' --save checkout-ts
+catlens 'ext:ts && keyword:checkout' --save checkout-ts
 
 # Rerun by name
 catlens checkout-ts
@@ -105,17 +103,17 @@ Lenses are stored as JSON in `.catlens/` at the repo root.
 
 ```bash
 # Inspect the AST
-catlens parse 'and(ext(ts), keyword("foo"))'
+catlens parse 'ext:ts && keyword:foo'
 
 # Canonical formatting (idempotent)
-catlens fmt 'and(ext(tsx,ts),keyword("api"))'
-# → and(ext(ts, tsx), keyword("api"))
+catlens fmt 'ext:tsx,ts && keyword:api'
+# → ext:ts,tsx && keyword:api
 
 # Lint for mistakes
-catlens lint 'and(ext(ts), not(ext(ts)))'
+catlens lint 'ext:ts && !ext:ts'
 # → error [contradictory-branches] always empty
 
-catlens lint 'ext(ts)' --strict
+catlens lint 'ext:ts' --strict
 # → error [suspiciously-broad] (warnings promoted to errors)
 ```
 
@@ -129,7 +127,7 @@ catlens lint 'ext(ts)' --strict
 | `--output file-list` | One path per line |
 | `--output json` | Full `SelectionResult` as JSON |
 | `--output snippets` | Fenced blocks for tagged sections; falls back to full files |
-| `--output diff` | Unified diff patches (requires `diff()` predicate) |
+| `--output diff` | Unified diff patches (requires `diff:` predicate) |
 | `--preview` / `-p` | File list + stats, no content |
 
 ---
@@ -144,6 +142,7 @@ catlens lint 'ext(ts)' --strict
 | `--explain` | Print inclusion reasons after render |
 | `--force` | Bypass 200 KB output guard |
 | `--save <name>` | Save query as lens after running |
+| `--agents` | Print the tool's AGENTS.md reference |
 
 ---
 

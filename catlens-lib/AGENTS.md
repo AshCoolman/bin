@@ -14,19 +14,24 @@ catlens [path] '<query>' [--preview] [--output markdown|file-list|json|snippets|
 Query DSL:
 
 ```
-query      = selection [ unless(selection) ]
-selection  = predicate | and(s,...) | or(s,...) | not(s)
+query     = expr
+expr      = and_expr ('||' and_expr)*
+and_expr  = not_expr ('&&' not_expr)*
+not_expr  = '!' not_expr | atom
+atom      = key:value | '(' expr ')'
 ```
 
 Predicates:
-- `ext(ts, tsx)` — by extension (no dot)
-- `keyword("term")` — files containing literal string
-- `file("path")` — exact repo-relative path
-- `glob("src/**/*.ts")` — glob against repo-relative path
-- `diff()` / `diff("HEAD~3")` — files in working diff, or vs ref
-- `older_than("30d")` / `newer_than("7d")` — by mtime (units: d w m y)
+- `ext:ts,tsx` — by extension (no dot, comma-separated)
+- `keyword:term` or `keyword:"multi word"` — files containing literal string
+- `file:src/foo.ts` — exact repo-relative path (comma-sep for multiple)
+- `path:src/**/*.ts` — glob against repo-relative path
+- `*diff:` / `*diff:HEAD~3` — files in working diff, or vs ref
+- `*older:30d` / `*newer:7d` — by last-commit date (units: d w m y)
 
-`unless` is top-level only: `sel unless(excl)` runs sel then drops excl matches.
+`*` = slow: shells out to git per query. Avoid in loops or on huge repos.
+
+Operators: `&&` (AND), `||` (OR), `!` (NOT), `()` for grouping. `&&` binds tighter than `||`.
 
 Exit codes:
 
@@ -35,8 +40,8 @@ Exit codes:
 Examples:
 
 ```bash
-catlens 'and(ext(ts), keyword("checkout"))' --preview
-catlens 'diff()' --preview
-catlens 'and(ext(ts), keyword("checkout")) unless(glob("**/*.test.*"))'
-catlens 'ext(ts)' --output file-list
+catlens 'ext:ts && keyword:checkout' --preview
+catlens 'diff:' --preview
+catlens 'ext:ts && keyword:checkout && !path:**/*.test.*'
+catlens 'ext:ts' --output file-list
 ```

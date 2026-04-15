@@ -38,7 +38,7 @@ afterAll(async () => {
 describe('MCP server tools', () => {
   describe('parse_query', () => {
     it('returns AST JSON for a valid DSL', async () => {
-      const r = await client.callTool({ name: 'parse_query', arguments: { dsl: 'ext(ts)' } })
+      const r = await client.callTool({ name: 'parse_query', arguments: { dsl: 'ext:ts' } })
       expect(JSON.parse(getText(r)).selection.type).toBe('ext')
     })
 
@@ -51,8 +51,8 @@ describe('MCP server tools', () => {
 
   describe('format_query', () => {
     it('returns canonical DSL', async () => {
-      const r = await client.callTool({ name: 'format_query', arguments: { dsl: 'and(ext(tsx,ts), keyword("api"))' } })
-      expect(getText(r)).toBe('and(ext(ts, tsx), keyword("api"))')
+      const r = await client.callTool({ name: 'format_query', arguments: { dsl: 'ext:tsx,ts && keyword:api' } })
+      expect(getText(r)).toBe('ext:ts,tsx && keyword:api')
     })
 
     it('returns error for invalid DSL', async () => {
@@ -63,22 +63,22 @@ describe('MCP server tools', () => {
 
   describe('run_query output formats', () => {
     it('markdown (default)', async () => {
-      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext(ts)' } })
+      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext:ts' } })
       expect(getText(r)).toMatch(/^##/)
     })
 
     it('file-list', async () => {
-      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext(ts)', output_format: 'file-list' } })
+      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext:ts', output_format: 'file-list' } })
       expect(getText(r).split('\n').sort()).toEqual(['src/a.ts', 'src/b.ts'])
     })
 
     it('json', async () => {
-      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext(ts)', output_format: 'json' } })
+      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext:ts', output_format: 'json' } })
       expect(JSON.parse(getText(r)).stats.fileCount).toBe(2)
     })
 
     it('preview', async () => {
-      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext(ts)', output_format: 'preview' } })
+      const r = await client.callTool({ name: 'run_query', arguments: { query: 'ext:ts', output_format: 'preview' } })
       expect(getText(r)).toMatch(/Matched:/)
     })
   })
@@ -119,7 +119,7 @@ describe('MCP server tools', () => {
     it('returns lenses after save_lens', async () => {
       await client.callTool({
         name: 'save_lens',
-        arguments: { name: 'list-test', dsl: 'ext(ts)', description: 'desc-hello' },
+        arguments: { name: 'list-test', dsl: 'ext:ts', description: 'desc-hello' },
       })
       const r = await client.callTool({ name: 'list_lenses', arguments: {} })
       expect(getText(r)).toContain('list-test')
@@ -129,7 +129,7 @@ describe('MCP server tools', () => {
 
   describe('run_lens', () => {
     it('runs a saved lens and returns output in requested format', async () => {
-      await client.callTool({ name: 'save_lens', arguments: { name: 'run-test', dsl: 'ext(ts)' } })
+      await client.callTool({ name: 'save_lens', arguments: { name: 'run-test', dsl: 'ext:ts' } })
       const r = await client.callTool({ name: 'run_lens', arguments: { name: 'run-test', output_format: 'file-list' } })
       expect(getText(r)).toContain('src/a.ts')
     })
@@ -142,7 +142,7 @@ describe('MCP server tools', () => {
 
   describe('preview_lens', () => {
     it('returns JSON with files and stats', async () => {
-      await client.callTool({ name: 'save_lens', arguments: { name: 'preview-test', dsl: 'ext(ts)' } })
+      await client.callTool({ name: 'save_lens', arguments: { name: 'preview-test', dsl: 'ext:ts' } })
       const r = await client.callTool({ name: 'preview_lens', arguments: { name: 'preview-test' } })
       const parsed = JSON.parse(getText(r))
       expect(Array.isArray(parsed.files)).toBe(true)
@@ -186,7 +186,7 @@ describe('MCP server tools', () => {
     it('persists a new lens and confirms', async () => {
       const r = await client.callTool({
         name: 'save_lens',
-        arguments: { name: 'save-test', dsl: 'ext(ts)' },
+        arguments: { name: 'save-test', dsl: 'ext:ts' },
       })
       expect(getText(r)).toContain('save-test')
     })

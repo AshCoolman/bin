@@ -4,43 +4,43 @@ import { parse } from './parser.js'
 
 describe('lint', () => {
   it('reports no diagnostics for a clean query', () => {
-    expect(lint(parse('and(ext(ts), keyword("checkout"))')).diagnostics).toEqual([])
+    expect(lint(parse('ext:ts && keyword:checkout')).diagnostics).toEqual([])
   })
 
-  it('warns on top-level not() (likely-zero-match)', () => {
-    const d = lint(parse('not(keyword("foo"))')).diagnostics
+  it('warns on top-level ! (likely-zero-match)', () => {
+    const d = lint(parse('!keyword:foo')).diagnostics
     expect(d).toHaveLength(1)
     expect(d[0]!.rule).toBe('likely-zero-match')
     expect(d[0]!.severity).toBe('warning')
   })
 
-  it('warns on bare top-level ext() (suspiciously-broad)', () => {
-    const d = lint(parse('ext(ts)')).diagnostics
+  it('warns on bare top-level ext: (suspiciously-broad)', () => {
+    const d = lint(parse('ext:ts')).diagnostics
     expect(d.some(x => x.rule === 'suspiciously-broad' && x.severity === 'warning')).toBe(true)
   })
 
-  it('warns on duplicate predicates within and()', () => {
-    const d = lint(parse('and(ext(ts), ext(ts))')).diagnostics
+  it('warns on duplicate predicates within &&', () => {
+    const d = lint(parse('ext:ts && ext:ts')).diagnostics
     expect(d.some(x => x.rule === 'duplicate-predicate')).toBe(true)
   })
 
   it('flags contradictory branches as error', () => {
-    const d = lint(parse('and(keyword("foo"), not(keyword("foo")))')).diagnostics
+    const d = lint(parse('keyword:foo && !keyword:foo')).diagnostics
     expect(d.some(x => x.rule === 'contradictory-branches' && x.severity === 'error')).toBe(true)
   })
 
   it('strict mode promotes warnings to errors', () => {
-    const d = lint(parse('and(ext(ts), ext(ts))'), { strict: true }).diagnostics
+    const d = lint(parse('ext:ts && ext:ts'), { strict: true }).diagnostics
     expect(d.find(x => x.rule === 'duplicate-predicate')!.severity).toBe('error')
   })
 
-  it('recurses into not() children', () => {
-    const d = lint(parse('not(and(ext(ts), ext(ts)))')).diagnostics
+  it('recurses into ! children', () => {
+    const d = lint(parse('!(ext:ts && ext:ts)')).diagnostics
     expect(d.some(x => x.rule === 'duplicate-predicate')).toBe(true)
   })
 
-  it('recurses into unless() selection and exclusion', () => {
-    const d = lint(parse('and(ext(ts), ext(ts)) unless(and(ext(js), ext(js)))')).diagnostics
+  it('recurses into nested && groups', () => {
+    const d = lint(parse('(ext:ts && ext:ts) && !(ext:js && ext:js)')).diagnostics
     expect(d.filter(x => x.rule === 'duplicate-predicate')).toHaveLength(2)
   })
 
@@ -50,14 +50,13 @@ describe('lint', () => {
   })
 
   it('strict mode leaves pre-existing errors unchanged', () => {
-    // empty-group is already an error; strict should not wrap/modify it
     const d = lint({ selection: { type: 'and', children: [] } }, { strict: true }).diagnostics
     const empty = d.find(x => x.rule === 'empty-group')!
     expect(empty.severity).toBe('error')
   })
 
-  it('or() with duplicates also warns', () => {
-    const d = lint(parse('or(ext(ts), ext(ts))')).diagnostics
+  it('|| with duplicates also warns', () => {
+    const d = lint(parse('ext:ts || ext:ts')).diagnostics
     expect(d.some(x => x.rule === 'duplicate-predicate')).toBe(true)
   })
 })

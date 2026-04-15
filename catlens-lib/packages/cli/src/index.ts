@@ -20,8 +20,8 @@ import {
   findByPrefix,
   disambiguate,
 } from '@catlens/core'
-import type { RenderFormat, Lens } from '@catlens/core'
-import { resolve } from 'node:path'
+import type { RenderFormat, Lens, SelectionResult, FileHit, SectionHit, DiffHit, Query } from '@catlens/core'
+import { resolve, relative } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
@@ -36,32 +36,34 @@ program
   .version('0.1.0')
   .addHelpText('after', `
 Examples:
-  $ catlens 'and(ext(ts), keyword("checkout"))' --preview
-  $ catlens 'ext(ts) unless(keyword(".test."))' --output file-list
-  $ catlens 'diff()' --preview
-  $ catlens 'and(ext(ts), keyword("TODO"))' --root ~/projects/myapp
-  $ catlens 'and(ext(ts), keyword("checkout"))' --save checkout-ts
+  $ catlens 'ext:ts && keyword:checkout' --preview
+  $ catlens 'ext:ts && !path:**/*.test.*' --output file-list
+  $ catlens 'diff:' --preview
+  $ catlens ./src 'ext:ts && keyword:checkout'
+  $ catlens 'ext:ts && keyword:checkout' --save checkout-ts
   $ catlens checkout-ts
 
-Predicates: ext  keyword  file  glob  tag  tagged_section
-            diff  authored_by  older_than  newer_than  commit_message
-Operators:  and  or  not  unless`)
+Predicates: ext:ts,tsx   keyword:term   path:src/**/*.ts   file:src/foo.ts
+           *diff:       *diff:HEAD~3   *older:30d         *newer:7d
+Operators:  &&   ||   !   ()
+
+* slow: shells out to git per query. Avoid in loops or on huge repos.`)
+
 
 // ── Main query command ────────────────────────────────────────────────────
 
 program
-  .argument('[root-or-query]', 'Repo root path, or DSL query / saved lens name')
-  .argument('[query]', 'DSL query string or saved lens name')
+  .argument('[args...]', 'Alternating [path] query pairs: ./src \'ext:ts\' ./mocks \'!ext:md\'')
   .option('-p, --preview', 'Preview matched files without rendering')
   .option('-o, --output <format>', 'Output format: markdown, file-list, json, snippets, diff', 'markdown')
   .option('--root <path>', 'Repo root path', process.cwd())
   .option('--no-line-numbers', 'Suppress line numbers in rendered output')
   .option('-r, --reasons', 'Show inclusion reasons in preview')
   .option('--force', 'Bypass large-result threshold warning')
-  .option('--save <name>', 'Save query as a named lens after running')
+  .option('--save <name>', 'Save query as a named lens after running (single-pair only)')
   .option('--explain', 'Print inclusion reasons for each file after render')
-  .option('--agents', 'Print .catlens/AGENTS.md for the current repo')
-  .action(async (firstArg: string | undefined, secondArg: string | undefined, opts: {
+  .option('--agents', 'Print AGENTS.md for this tool')
+  .action(async (args: string[], opts: {
     preview: boolean
     output: string
     root: string
@@ -84,88 +86,61 @@ program
       return
     }
 
-    // Resolve positional args: optional [root] [query] or just [query]
-    let queryArg: string | undefined
-    let repoRoot: string
-    if (secondArg !== undefined) {
-      repoRoot = resolve(firstArg!)
-      queryArg = secondArg
-    } else if (firstArg !== undefined && /^[./~]/.test(firstArg)) {
-      repoRoot = resolve(firstArg)
-      queryArg = undefined
-    } else {
-      repoRoot = resolve(opts.root)
-      queryArg = firstArg
+    // Parse alternating [path] query pairs from positional args
+    const pairs: { root: string; queryStr: string }[] = []
+    let i = 0
+    while (i < args.length) {
+      const cur = args[i]!
+      if (/^[./~]/.test(cur)) {
+        const next = args[i + 1]
+        if (next === undefined) {
+          console.error(pc.red(`Path "${cur}" has no query`))
+          process.exit(1)
+        }
+        pairs.push({ root: resolve(cur), queryStr: next })
+        i += 2
+      } else {
+        pairs.push({ root: resolve(opts.root), queryStr: cur })
+        i += 1
+      }
     }
 
-    if (!queryArg) {
+    if (pairs.length === 0) {
       program.help()
       return
     }
 
-    // Resolve: is this a lens name, DSL string, or ambiguous prefix?
-    let query
-    if (LENS_NAME_RE.test(queryArg)) {
-      // Could be a saved lens name or an inline DSL that happens to match the pattern.
-      // Try loading as a lens first; fall back to parsing as DSL.
+    // Build results for each pair
+    const results: SelectionResult[] = []
+    for (const pair of pairs) {
+      const query = await resolveQuery(pair.queryStr, pair.root)
+      let r: SelectionResult
       try {
-        const lens = await loadLens(repoRoot, queryArg)
-        query = lens.query
-      } catch {
-        // Not a saved lens. Try parsing as DSL.
-        // Check if it's a prefix match for multiple lenses.
-        const matches = await findByPrefix(repoRoot, queryArg)
-        if (matches.length > 1) {
-          let chosen: string
-          try {
-            chosen = await disambiguate(matches)
-          } catch {
-            console.error(pc.red('Lens selection cancelled.'))
-            process.exit(1)
-          }
-          const lens = await loadLens(repoRoot, chosen)
-          query = lens.query
-        } else {
-          try {
-            query = parse(queryArg)
-          } catch (err) {
-            if (err instanceof ParseError) {
-              console.error(pc.red(`Parse error: ${err.message}`))
-              process.exit(1)
-            }
-            throw err
-          }
-        }
-      }
-    } else {
-      try {
-        query = parse(queryArg)
+        r = await buildResult(query, pair.root)
       } catch (err) {
-        if (err instanceof ParseError) {
-          console.error(pc.red(`Parse error: ${err.message}`))
-          process.exit(1)
-        }
-        throw err
+        console.error(pc.red(`Engine error: ${err instanceof Error ? err.message : String(err)}`))
+        process.exit(1)
       }
+      results.push(r)
     }
 
-    let result
-    try {
-      result = await buildResult(query, repoRoot)
-    } catch (err) {
-      console.error(pc.red(`Engine error: ${err instanceof Error ? err.message : String(err)}`))
-      process.exit(1)
-    }
-
-    // Save lens if requested (save regardless of result count)
+    // Save lens (single-pair only)
     if (opts.save) {
-      try {
-        await saveLens(repoRoot, opts.save, query)
-        console.error(pc.green(`Lens saved: ${opts.save}`))
-      } catch (err) {
-        console.error(pc.yellow(`Warning: could not save lens: ${err instanceof Error ? err.message : String(err)}`))
+      if (pairs.length > 1) {
+        console.error(pc.yellow('Warning: --save ignored with multiple path/query pairs'))
+      } else {
+        const only = pairs[0]!
+        const query = await resolveQuery(only.queryStr, only.root)
+        try {
+          await saveLens(only.root, opts.save, query)
+          console.error(pc.green(`Lens saved: ${opts.save}`))
+        } catch (err) {
+          console.error(pc.yellow(`Warning: could not save lens: ${err instanceof Error ? err.message : String(err)}`))
+        }
       }
     }
+
+    const result = results.length === 1 ? results[0]! : mergeResults(results)
 
     if (result.files.length === 0) {
       console.error(pc.yellow('No matches found.'))
@@ -372,6 +347,75 @@ program.parseAsync(process.argv).catch(err => {
 })
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+async function resolveQuery(queryStr: string, repoRoot: string): Promise<Query> {
+  if (LENS_NAME_RE.test(queryStr)) {
+    try {
+      const lens = await loadLens(repoRoot, queryStr)
+      return lens.query
+    } catch {
+      const matches = await findByPrefix(repoRoot, queryStr)
+      if (matches.length > 1) {
+        let chosen: string
+        try {
+          chosen = await disambiguate(matches)
+        } catch {
+          console.error(pc.red('Lens selection cancelled.'))
+          process.exit(1)
+        }
+        const lens = await loadLens(repoRoot, chosen)
+        return lens.query
+      }
+      // Not a saved lens; fall through to DSL parse
+    }
+  }
+  try {
+    return parse(queryStr)
+  } catch (err) {
+    if (err instanceof ParseError) {
+      console.error(pc.red(`Parse error: ${err.message}`))
+      process.exit(1)
+    }
+    throw err
+  }
+}
+
+function mergeResults(results: SelectionResult[]): SelectionResult {
+  const cwd = process.cwd()
+  const seenFiles = new Set<string>()
+  const files: FileHit[] = []
+  const sections: SectionHit[] = []
+  const diffs: DiffHit[] = []
+
+  for (const r of results) {
+    for (const file of r.files) {
+      const normPath = relative(cwd, resolve(r.repoRoot, file.path))
+      if (!seenFiles.has(normPath)) {
+        seenFiles.add(normPath)
+        files.push({ ...file, path: normPath })
+      }
+    }
+    for (const s of r.sections) {
+      const normPath = relative(cwd, resolve(r.repoRoot, s.path))
+      sections.push({ ...s, path: normPath })
+    }
+    for (const d of r.diffs) {
+      const normPath = relative(cwd, resolve(r.repoRoot, d.path))
+      diffs.push({ ...d, path: normPath })
+    }
+  }
+
+  const totalLines = files.reduce((sum, f) => sum + f.lineCount, 0)
+  const estimatedChars = files.reduce((sum, f) => sum + f.content.length, 0)
+  return {
+    query: results[0]!.query,
+    repoRoot: cwd,
+    files,
+    sections,
+    diffs,
+    stats: { fileCount: files.length, sectionCount: sections.length, diffCount: diffs.length, totalLines, estimatedChars },
+  }
+}
 
 async function confirm(prompt: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {

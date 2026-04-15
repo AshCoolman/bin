@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { execa } from 'execa'
 import { buildResult } from './result.js'
 import { parse } from '../query/parser.js'
+import type { Query } from '../query/ast.js'
 
 let tmp: string
 let gitTmp: string
@@ -35,7 +36,7 @@ afterAll(async () => {
 
 describe('buildResult', () => {
   it('returns a SelectionResult with stats and files for a valid query', async () => {
-    const r = await buildResult(parse('ext(ts)'), tmp)
+    const r = await buildResult(parse('ext:ts'), tmp)
     expect(r.files.map(f => f.path).sort()).toEqual(['src/a.ts', 'src/b.ts'])
     expect(r.stats.fileCount).toBe(2)
     expect(r.stats.totalLines).toBeGreaterThan(0)
@@ -44,8 +45,8 @@ describe('buildResult', () => {
     expect(r.sections).toEqual([])
   })
 
-  it('combines predicates with and()', async () => {
-    const r = await buildResult(parse('and(ext(ts), keyword("checkout"))'), tmp)
+  it('combines predicates with &&', async () => {
+    const r = await buildResult(parse('ext:ts && keyword:checkout'), tmp)
     expect(r.files.map(f => f.path)).toEqual(['src/a.ts'])
   })
 
@@ -55,26 +56,24 @@ describe('buildResult', () => {
   })
 
   it('does not touch git when query has no git predicates', async () => {
-    // Using a non-git temp dir — buildResult should complete without error
-    const r = await buildResult(parse('ext(py)'), tmp)
+    const r = await buildResult(parse('ext:py'), tmp)
     expect(r.files.map(f => f.path)).toEqual(['src/c.py'])
   })
 
   it('gracefully handles git predicates on a non-git dir (returns empty)', async () => {
-    const r = await buildResult(parse('authored_by("nobody")'), tmp)
+    const q: Query = { selection: { type: 'authored_by', author: 'nobody' } }
+    const r = await buildResult(q, tmp)
     expect(r.files).toEqual([])
   })
 
-  it('traverses nested and/or/not/unless for git detection', async () => {
-    // Wraps a git predicate deep inside nested nodes; this exercises nodeUsesGit's recursion.
-    const query = parse('and(ext(ts), or(keyword("foo"), and(not(authored_by("alice")), keyword("checkout")))) unless(ext(py))')
-    const r = await buildResult(query, tmp)
-    // Should complete without error and return some result
+  it('traverses nested and/or/not for git detection', async () => {
+    const q = parse('ext:ts && (keyword:foo || !diff:)')
+    const r = await buildResult(q, tmp)
     expect(Array.isArray(r.files)).toBe(true)
   })
 
   it('collects DiffHit entries for matched files that are in the working diff', async () => {
-    const r = await buildResult(parse('diff()'), gitTmp)
+    const r = await buildResult(parse('diff:'), gitTmp)
     expect(r.files.map(f => f.path)).toContain('a.ts')
     expect(r.diffs).toHaveLength(1)
     expect(r.diffs[0]!.path).toBe('a.ts')

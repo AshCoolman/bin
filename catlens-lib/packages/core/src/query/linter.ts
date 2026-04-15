@@ -34,16 +34,16 @@ function lintTopLevel(query: Query, diagnostics: LintDiagnostic[]): void {
     diagnostics.push({
       severity: 'warning',
       rule: 'likely-zero-match',
-      message: 'Top-level not() always matches nothing — wrap in and() with another predicate',
+      message: 'Top-level ! always matches nothing — use with && to narrow',
     })
   }
 
-  // suspiciously-broad: single ext() at top level with no other narrowing
+  // suspiciously-broad: single ext: at top level with no other narrowing
   if (node.type === 'ext') {
     diagnostics.push({
       severity: 'warning',
       rule: 'suspiciously-broad',
-      message: `ext() alone matches every file with those extensions — add keyword() or other predicates to narrow`,
+      message: `ext: alone matches every file with those extensions — use && keyword: or other predicates to narrow`,
     })
   }
 }
@@ -75,7 +75,7 @@ function lintGroup(op: 'and' | 'or', node: AndNode | OrNode, diagnostics: LintDi
     diagnostics.push({
       severity: 'error',
       rule: 'empty-group',
-      message: `${op}() has no children`,
+      message: `${op === 'and' ? '&&' : '||'} has no children`,
     })
     return
   }
@@ -87,7 +87,7 @@ function lintGroup(op: 'and' | 'or', node: AndNode | OrNode, diagnostics: LintDi
       diagnostics.push({
         severity: 'warning',
         rule: 'duplicate-predicate',
-        message: `Duplicate predicate in ${op}(): ${f}`,
+        message: `Duplicate predicate in ${op === 'and' ? '&&' : '||'}: ${f}`,
       })
     }
     seen.add(f)
@@ -103,7 +103,7 @@ function lintGroup(op: 'and' | 'or', node: AndNode | OrNode, diagnostics: LintDi
           diagnostics.push({
             severity: 'error',
             rule: 'contradictory-branches',
-            message: `and() contains both ${negatedFmt} and not(${negatedFmt}) — always empty`,
+            message: `&& contains both ${negatedFmt} and !(${negatedFmt}) — always empty`,
           })
         }
       }

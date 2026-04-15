@@ -25,7 +25,7 @@ afterAll(async () => {
 
 describe('run_query parity with CLI', () => {
   it('returns same file paths as direct engine call', async () => {
-    const dsl = 'and(ext(ts), keyword("checkout"))'
+    const dsl = 'ext:ts && keyword:checkout'
     const query = parse(dsl)
     const direct = await buildResult(query, TS_APP)
 
@@ -44,7 +44,7 @@ describe('run_query parity with CLI', () => {
   })
 
   it('accepts JSON AST input and returns same result as DSL input', async () => {
-    const dsl = 'and(ext(ts), keyword("api"))'
+    const dsl = 'ext:ts && keyword:api'
     const astJson = JSON.stringify(parse(dsl))
 
     const [dslResult, astResult] = await Promise.all([
@@ -63,7 +63,7 @@ describe('run_query parity with CLI', () => {
   it('returns markdown output by default', async () => {
     const toolResult = await client.callTool({
       name: 'run_query',
-      arguments: { query: 'ext(ts)' },
+      arguments: { query: 'ext:ts' },
     })
     const content = toolResult.content as Array<{ type: string; text: string }>
     expect(content[0]?.text).toMatch(/^##/)
@@ -74,7 +74,7 @@ describe('parse_query', () => {
   it('returns Query AST as JSON', async () => {
     const result = await client.callTool({
       name: 'parse_query',
-      arguments: { dsl: 'and(ext(ts), keyword("checkout"))' },
+      arguments: { dsl: 'ext:ts && keyword:checkout' },
     })
     const content = result.content as Array<{ type: string; text: string }>
     const ast = JSON.parse(content[0]!.text)
@@ -94,16 +94,16 @@ describe('format_query', () => {
   it('returns canonical DSL', async () => {
     const result = await client.callTool({
       name: 'format_query',
-      arguments: { dsl: 'and(ext(tsx,ts),keyword("api"))' },
+      arguments: { dsl: 'ext:tsx,ts && keyword:api' },
     })
     const content = result.content as Array<{ type: string; text: string }>
-    expect(content[0]!.text).toBe('and(ext(ts, tsx), keyword("api"))')
+    expect(content[0]!.text).toBe('ext:ts,tsx && keyword:api')
   })
 })
 
 describe('list_lenses and run_lens parity', () => {
   it('list_lenses returns saved lens after save', async () => {
-    const query = parse('and(ext(ts), keyword("checkout"))')
+    const query = parse('ext:ts && keyword:checkout')
     await saveLens(TS_APP, 'mcp-test-lens', query)
 
     try {
@@ -116,7 +116,7 @@ describe('list_lenses and run_lens parity', () => {
   })
 
   it('run_lens returns same result as run_query for the same query', async () => {
-    const dsl = 'and(ext(ts), keyword("checkout"))'
+    const dsl = 'ext:ts && keyword:checkout'
     const query = parse(dsl)
     await saveLens(TS_APP, 'mcp-parity-lens', query)
 

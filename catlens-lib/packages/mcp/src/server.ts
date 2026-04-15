@@ -31,7 +31,7 @@ export function createMcpServer(repoRoot: string): McpServer {
     {
       description: 'Parse a DSL query string and return the Query AST as JSON',
       inputSchema: {
-        dsl: z.string().describe('CatLens DSL query string, e.g. and(ext(ts), keyword("checkout"))'),
+        dsl: z.string().describe('CatLens DSL query string, e.g. ext:ts && keyword:checkout'),
       },
     },
     ({ dsl }) => {

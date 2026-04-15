@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parse, buildResult } from '@catlens/core'
+import type { Query } from '@catlens/core'
 import { fixturePath } from './helpers.js'
 
 const TAGGED = fixturePath('tagged-sections')
@@ -9,7 +10,7 @@ const GIT_HISTORY = fixturePath('git-history')
 
 describe('glob predicate', () => {
   it('matches files by glob pattern', async () => {
-    const q = parse('glob("src/**/*.ts")')
+    const q = parse('path:src/**/*.ts')
     const result = await buildResult(q, TS_APP)
     expect(result.files.length).toBeGreaterThan(0)
     for (const f of result.files) {
@@ -18,7 +19,7 @@ describe('glob predicate', () => {
   })
 
   it('does not match excluded files', async () => {
-    const q = parse('glob("*.log")')
+    const q = parse('path:*.log')
     const result = await buildResult(q, IGNORED)
     // .log files are gitignored and excluded from discovery
     expect(result.files.length).toBe(0)
@@ -27,7 +28,7 @@ describe('glob predicate', () => {
 
 describe('tag predicate', () => {
   it('matches files containing the tag anywhere', async () => {
-    const q = parse('tag("@catty:api")')
+    const q: Query = { selection: { type: 'tag', tag: '@catty:api', scope: 'anywhere' } }
     const result = await buildResult(q, TAGGED)
     expect(result.files.length).toBeGreaterThan(0)
     for (const f of result.files) {
@@ -36,7 +37,7 @@ describe('tag predicate', () => {
   })
 
   it('matches files containing the tag in file scope (first 10 lines)', async () => {
-    const q = parse('tag("@catty:api", file)')
+    const q: Query = { selection: { type: 'tag', tag: '@catty:api', scope: 'file' } }
     const result = await buildResult(q, TAGGED)
     expect(result.files.length).toBeGreaterThan(0)
     for (const f of result.files) {
@@ -48,7 +49,7 @@ describe('tag predicate', () => {
 
 describe('tagged_section predicate', () => {
   it('captures sections between open/close tags', async () => {
-    const q = parse('tagged_section("catty:start", "catty:end")')
+    const q: Query = { selection: { type: 'tagged_section', openTag: 'catty:start', closeTag: 'catty:end' } }
     const result = await buildResult(q, TAGGED)
 
     expect(result.files.length).toBeGreaterThan(0)
@@ -63,17 +64,11 @@ describe('tagged_section predicate', () => {
 
 describe('unless composition', () => {
   it('subtracts files from the base selection', async () => {
-    // Get all ts files
-    const allTs = await buildResult(parse('ext(ts)'), TS_APP)
-    // Get ts files that don't have "checkout"
-    const withoutCheckout = await buildResult(
-      parse('ext(ts) unless(keyword("checkout"))'),
-      TS_APP,
-    )
+    const allTs = await buildResult(parse('ext:ts'), TS_APP)
+    const withoutCheckout = await buildResult(parse('ext:ts && !keyword:checkout'), TS_APP)
 
     expect(withoutCheckout.files.length).toBeLessThan(allTs.files.length)
 
-    // None of the remaining files should have "checkout"
     for (const f of withoutCheckout.files) {
       expect(f.content.toLowerCase()).not.toContain('checkout')
     }
@@ -82,25 +77,20 @@ describe('unless composition', () => {
 
 describe('git predicates — graceful degradation', () => {
   it('authored_by returns no matches on non-git fixture', async () => {
-    // git-history fixture is a real git repo, but authored_by for a non-existent author
-    const q = parse('authored_by("nonexistent-person-xyz")')
+    const q: Query = { selection: { type: 'authored_by', author: 'nonexistent-person-xyz' } }
     const result = await buildResult(q, GIT_HISTORY)
     expect(result.files.length).toBe(0)
   })
 
-  it('older_than gracefully returns empty on non-git dir', async () => {
-    // TAGGED fixture is not a git repo
-    const q = parse('older_than("1d")')
+  it('older_than runs on non-git dir (falls back to mtime)', async () => {
+    const q = parse('older:1d')
     const result = await buildResult(q, TAGGED)
-    // No git facts → no matches
-    expect(result.files.length).toBe(0)
+    expect(Array.isArray(result.files)).toBe(true)
   })
 
   it('diff predicate gracefully returns empty when no diff', async () => {
-    const q = parse('diff()')
+    const q = parse('diff:')
     const result = await buildResult(q, TS_APP)
-    // In test environment no staged/unstaged changes expected for fixture
-    // Just confirm it runs without error
     expect(result).toBeDefined()
     expect(Array.isArray(result.files)).toBe(true)
   })

@@ -8,23 +8,18 @@ const roundtrip = (dsl: string): string => format(parse(dsl))
 describe('format', () => {
   describe('idempotent roundtrips', () => {
     const cases = [
-      'ext(ts)',
-      'and(ext(ts, tsx), keyword("checkout"))',
-      'or(ext(ts), ext(js))',
-      'not(keyword("foo"))',
-      'file("a.ts", "b.ts")',
-      'glob("src/**/*.ts")',
-      'tag("@feat:auth")',
-      'tag("@feat:auth", file)',
-      'tagged_section("start")',
-      'tagged_section("start", "end")',
-      'diff()',
-      'diff("main")',
-      'commit_message("fix")',
-      'authored_by("alice")',
-      'older_than("30d")',
-      'newer_than("2w")',
-      'ext(ts) unless(keyword(".test."))',
+      'ext:ts',
+      'ext:js,ts,tsx && keyword:checkout',
+      'ext:ts || ext:js',
+      '!keyword:foo',
+      'file:a.ts,b.ts',
+      'path:src/**/*.ts',
+      'diff:',
+      'diff:main',
+      'older:30d',
+      'newer:2w',
+      'ext:ts && !keyword:foo',
+      'ext:ts && (keyword:a || keyword:b)',
     ]
     it.each(cases)('roundtrip: %s', (dsl) => {
       const once = roundtrip(dsl)
@@ -33,31 +28,40 @@ describe('format', () => {
     })
   })
 
-  it('sorts ext() extensions alphabetically', () => {
-    expect(format(parse('ext(tsx, ts, js)'))).toBe('ext(js, ts, tsx)')
+  it('sorts ext extensions alphabetically', () => {
+    expect(format(parse('ext:tsx,ts,js'))).toBe('ext:js,ts,tsx')
   })
 
-  it('canonicalises any() → or() (preserving child order)', () => {
-    expect(format(parse('any(ext(ts), ext(js))'))).toBe('or(ext(ts), ext(js))')
+  it('or child of and gets parens', () => {
+    expect(format(parse('(ext:ts || ext:js) && keyword:checkout')))
+      .toBe('(ext:ts || ext:js) && keyword:checkout')
   })
 
-  it('escapes backslashes and quotes in string args', () => {
+  it('and child of not gets parens', () => {
+    expect(format(parse('!(ext:ts && keyword:foo)'))).toBe('!(ext:ts && keyword:foo)')
+  })
+
+  it('or child of not gets parens', () => {
+    expect(format(parse('!(ext:ts || ext:js)'))).toBe('!(ext:ts || ext:js)')
+  })
+
+  it('keyword with spaces gets quoted', () => {
+    const q: Query = { selection: { type: 'keyword', term: 'my checkout' } }
+    expect(format(q)).toBe('keyword:"my checkout"')
+  })
+
+  it('keyword with special chars escapes and roundtrips', () => {
     const q: Query = { selection: { type: 'keyword', term: 'a\\b"c' } }
-    expect(format(q)).toBe('keyword("a\\\\b\\"c")')
+    const formatted = format(q)
+    expect(parse(formatted).selection).toEqual(q.selection)
   })
 
-  it('formatSelection handles nested unless (from MCP AST input)', () => {
+  it('unless node (stored lens compat) formats as && !()', () => {
     const node: Query['selection'] = {
-      type: 'and',
-      children: [
-        { type: 'ext', extensions: ['ts'] },
-        {
-          type: 'unless',
-          selection: { type: 'keyword', term: 'foo' },
-          exclusion: { type: 'keyword', term: 'bar' },
-        },
-      ],
+      type: 'unless',
+      selection: { type: 'keyword', term: 'foo' },
+      exclusion: { type: 'keyword', term: 'bar' },
     }
-    expect(formatSelection(node)).toBe('and(ext(ts), keyword("foo") unless(keyword("bar")))')
+    expect(formatSelection(node)).toBe('keyword:foo && !(keyword:bar)')
   })
 })

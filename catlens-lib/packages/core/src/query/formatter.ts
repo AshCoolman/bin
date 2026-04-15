@@ -2,18 +2,10 @@ import type { Query, SelectionNode, PredicateNode } from './ast.js'
 
 /**
  * Format a Query AST into canonical DSL form.
- * - Canonical operator names: `or` not `any`
- * - Extensions: sorted, unquoted
- * - Strings: double-quoted
- * - Idempotent: format(parse(format(q))) === format(q)
+ * Idempotent: format(parse(format(q))) === format(q)
  */
 export function format(query: Query): string {
-  const node = query.selection
-  if (node.type === 'unless') {
-    // unless is a top-level suffix modifier in the DSL
-    return `${formatSelection(node.selection)} unless(${formatSelection(node.exclusion)})`
-  }
-  return formatSelection(node)
+  return formatSelection(query.selection)
 }
 
 /**
@@ -23,14 +15,20 @@ export function format(query: Query): string {
 export function formatSelection(node: SelectionNode): string {
   switch (node.type) {
     case 'and':
-      return `and(${node.children.map(formatSelection).join(', ')})`
+      return node.children.map(c =>
+        c.type === 'or' ? `(${formatSelection(c)})` : formatSelection(c),
+      ).join(' && ')
     case 'or':
-      return `or(${node.children.map(formatSelection).join(', ')})`
-    case 'not':
-      return `not(${formatSelection(node.child)})`
+      return node.children.map(formatSelection).join(' || ')
+    case 'not': {
+      const inner = formatSelection(node.child)
+      return (node.child.type === 'and' || node.child.type === 'or')
+        ? `!(${inner})`
+        : `!${inner}`
+    }
     case 'unless':
-      // Nested unless (from MCP AST input): format inline
-      return `${formatSelection(node.selection)} unless(${formatSelection(node.exclusion)})`
+      // Backward compat: unless nodes from stored lenses render as && !()
+      return `${formatSelection(node.selection)} && !(${formatSelection(node.exclusion)})`
     default:
       return formatPredicate(node as PredicateNode)
   }
@@ -38,39 +36,44 @@ export function formatSelection(node: SelectionNode): string {
 
 function formatPredicate(pred: PredicateNode): string {
   switch (pred.type) {
-    case 'ext': {
-      const exts = [...pred.extensions].sort().join(', ')
-      return `ext(${exts})`
-    }
+    case 'ext':
+      return `ext:${[...pred.extensions].sort().join(',')}`
     case 'keyword':
-      return `keyword(${q(pred.term)})`
-    case 'file':
-      return `file(${pred.paths.map(q).join(', ')})`
+      return needsQuoting(pred.term)
+        ? `keyword:"${escapeStr(pred.term)}"`
+        : `keyword:${pred.term}`
     case 'glob':
-      return `glob(${q(pred.pattern)})`
+      return `path:${pred.pattern}`
+    case 'file':
+      return `file:${pred.paths.join(',')}`
+    case 'diff':
+      return pred.ref !== undefined ? `diff:${pred.ref}` : `diff:`
+    case 'older_than':
+      return `older:${fmtDur(pred.duration)}`
+    case 'newer_than':
+      return `newer:${fmtDur(pred.duration)}`
+    // Legacy predicates from stored lenses — render as best-effort strings
     case 'tag':
       return pred.scope === 'file'
-        ? `tag(${q(pred.tag)}, file)`
-        : `tag(${q(pred.tag)})`
+        ? `tag:"${pred.tag}",file`
+        : `tag:${pred.tag}`
     case 'tagged_section':
       return pred.closeTag !== undefined
-        ? `tagged_section(${q(pred.openTag)}, ${q(pred.closeTag)})`
-        : `tagged_section(${q(pred.openTag)})`
-    case 'diff':
-      return pred.ref !== undefined ? `diff(${q(pred.ref)})` : `diff()`
+        ? `tagged_section:"${pred.openTag}","${pred.closeTag}"`
+        : `tagged_section:"${pred.openTag}"`
     case 'commit_message':
-      return `commit_message(${q(pred.term)})`
+      return `commit_message:"${escapeStr(pred.term)}"`
     case 'authored_by':
-      return `authored_by(${q(pred.author)})`
-    case 'older_than':
-      return `older_than(${q(fmtDur(pred.duration))})`
-    case 'newer_than':
-      return `newer_than(${q(fmtDur(pred.duration))})`
+      return `authored_by:"${escapeStr(pred.author)}"`
   }
 }
 
-function q(s: string): string {
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+function needsQuoting(s: string): boolean {
+  return !s || /[\s&|!()]/.test(s)
+}
+
+function escapeStr(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 function fmtDur(d: { value: number; unit: string }): string {
