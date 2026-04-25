@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="${1:?usage: $0 https://github.com/OWNER/REPO}"
+repo="${repo#https://github.com/}"
+repo="${repo#http://github.com/}"
+repo="${repo%.git}"
+
+o() {
+  if command -v open >/dev/null 2>&1; then
+    open "$1"
+  else
+    xdg-open "$1" >/dev/null 2>&1
+  fi
+}
+
+branch="$(
+  curl -fsSL "https://api.github.com/repos/$repo" |
+    sed -n 's/.*"default_branch": *"\([^"]*\)".*/\1/p'
+)"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+curl -fsSL "https://raw.githubusercontent.com/$repo/$branch/package.json" -o "$tmp/package.json"
+curl -fsSL "https://raw.githubusercontent.com/$repo/$branch/package-lock.json" -o "$tmp/package-lock.json"
+
+echo "Opening repo-level checks..."
+o "https://scorecard.dev/viewer/?uri=github.com/$repo"
+o "https://github.com/$repo/network/dependencies"
+o "https://github.com/$repo/security"
+o "https://libraries.io/github/$repo"
+o "https://repos.ecosyste.ms/hosts/GitHub/repositories/${repo/\//%2F}"
+
+echo "Running npm ci --ignore-scripts + npm audit in temp dir..."
+(
+  cd "$tmp"
+  npm ci --ignore-scripts
+  npm audit
+)
