@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Convert PDF(s) to Markdown via Marker. Output: <input>.md next to each <input>.pdf.
+# Usage:
+#   pdf-to-md <file.pdf>...                   one or more files
+#   pdf-to-md <dir>...                        all *.pdf in each dir (top-level)
+#   pdf-to-md -r <dir>...                     recurse into subdirs
+#   pdf-to-md --force ...                     re-convert even if .md exists
+
+set -euo pipefail
+
+recursive=0
+force=0
+inputs=()
+
+for arg in "$@"; do
+  case "$arg" in
+    -r|--recursive) recursive=1 ;;
+    -f|--force)     force=1 ;;
+    -h|--help)
+      sed -n '2,8p' "$0" | sed 's/^# \?//'
+      exit 0
+      ;;
+    -*) echo "pdf-to-md: unknown flag: $arg" >&2; exit 1 ;;
+    *)  inputs+=("$arg") ;;
+  esac
+done
+
+if [[ ${#inputs[@]} -eq 0 ]]; then
+  echo "Usage: pdf-to-md [-r] [--force] <file.pdf|dir>..." >&2
+  exit 1
+fi
+
+if ! command -v uvx >/dev/null 2>&1; then
+  echo "pdf-to-md: uvx not found (install with: brew install uv)" >&2
+  exit 1
+fi
+
+# Collect PDF paths from files and directories.
+pdfs=()
+for inp in "${inputs[@]}"; do
+  if [[ -f "$inp" ]]; then
+    pdfs+=("$inp")
+  elif [[ -d "$inp" ]]; then
+    if [[ $recursive -eq 1 ]]; then
+      while IFS= read -r -d '' p; do pdfs+=("$p"); done \
+        < <(find "$inp" -type f -iname '*.pdf' -print0)
+    else
+      while IFS= read -r -d '' p; do pdfs+=("$p"); done \
+        < <(find "$inp" -maxdepth 1 -type f -iname '*.pdf' -print0)
+    fi
+  else
+    echo "pdf-to-md: skip (not a file or directory): $inp" >&2
+  fi
+done
+
+if [[ ${#pdfs[@]} -eq 0 ]]; then
+  echo "pdf-to-md: no PDFs found" >&2
+  exit 1
+fi
+
+convert_one() {
+  local input=$1
+  local abs out_dir stem out_md nested_md
+  abs=$(cd "$(dirname "$input")" && pwd)/$(basename "$input")
+  out_dir=$(dirname "$abs")
+  stem=$(basename "$abs")
+  stem=${stem%.*}
+  out_md="$out_dir/$stem.md"
+
+  if [[ -f "$out_md" && $force -eq 0 ]]; then
+    echo "skip (exists): $out_md" >&2
+    return 0
+  fi
+
+  echo "→ marker $abs" >&2
+  uvx --from marker-pdf marker_single "$abs" \
+    --output_dir "$out_dir" --output_format markdown >&2
+
+  nested_md="$out_dir/$stem/$stem.md"
+  if [[ -f "$nested_md" ]]; then
+    mv "$nested_md" "$out_md"
+  fi
+
+  if [[ ! -f "$out_md" ]]; then
+    echo "pdf-to-md: expected $out_md but it wasn't produced" >&2
+    return 1
+  fi
+  echo "$out_md"
+}
+
+fail=0
+for pdf in "${pdfs[@]}"; do
+  convert_one "$pdf" || fail=1
+done
+
+exit $fail
