@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'EOF'
+commit-plan-execute — interactively run commit commands from a plan file
+
+USAGE
+  commit-plan-execute              run latest plan in ./commit-plan/
+  commit-plan-execute --help       this message
+
+PLAN FORMAT (for AI agents — token-efficient)
+  Path:      ./commit-plan/<YYYY-MM-DD-HHmm-ss>.md
+  Content:   one commit per line, each line a single shell command:
+             git add <files> && git cm -m "<conventional commit msg>"
+  Parser:    grep -E 'git add .* && git cm'
+             leading list markers (- or *) and surrounding backticks are stripped.
+             each line is split on ` && git cm ` so stage runs first, then commit.
+  Anything else in the file is ignored — no headers, prose, or rationale needed.
+
+MINIMAL EXAMPLE
+  git add src/foo.ts && git cm -m "fix(foo): handle null id"
+  git add src/bar.ts test/bar.test.ts && git cm -m "feat(bar): add retry"
+
+RULES
+  - one line = one commit; no multi-line commands
+  - quote the message with double quotes
+  - list every file explicitly; no globs unless you mean them
+  - order matters: lines run top-to-bottom
+
+RUNTIME
+  for each line:
+    1. stage runs automatically
+    2. staged files are listed (the result, not the command)
+    3. prompt: (c)ommit, (e)dit message, (d)iff, (s)kip
+EOF
+  exit 0
+fi
+
+latest=$(ls -t ./commit-plan/*.md 2>/dev/null | head -n1 || true)
+if [[ -z "${latest:-}" ]]; then
+  echo "no commit plan found in ./commit-plan/" >&2
+  exit 1
+fi
+
+out=./tmp/commit-plan
+mkdir -p "$out"
+rm -f "$out"/*.stage "$out"/*.msg "$out"/*.sh
+
+i=0
+while IFS= read -r line; do
+  i=$((i + 1))
+  printf -v base '%02d' "$i"
+  stage_part="${line%% && git cm *}"
+  commit_part="git cm ${line#* && git cm }"
+  printf '%s\n' "$stage_part" > "$out/$base.stage"
+  printf '%s\n' "$commit_part" > "$out/$base.msg"
+done < <(
+  grep -E 'git add .* && git cm' "$latest" \
+    | sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//; s/^`//; s/`[[:space:]]*$//'
+)
+
+if [[ "$i" -eq 0 ]]; then
+  echo "no commit commands found in $latest" >&2
+  exit 1
+fi
+
+echo "wrote $i commit(s) to $out/ (from $latest)"
+echo
+
+for stage_file in "$out"/*.stage; do
+  base="${stage_file%.stage}"
+  msg_file="$base.msg"
+  label=$(basename "$base")
+
+  echo "── $label ──"
+  if ! bash "$stage_file"; then
+    echo "stage failed — opening editor on stage command" >&2
+    ${EDITOR:-zed -w} "$stage_file"
+    if ! bash "$stage_file"; then
+      echo "stage still failing, skipping" >&2
+      continue
+    fi
+  fi
+
+  while :; do
+    echo
+    echo "staged:"
+    git diff --cached --stat
+    echo
+    echo "message: $(cat "$msg_file")"
+    echo
+    read -r -p '(c)ommit, (e)dit message, (d)iff, (s)kip? ' choice </dev/tty
+    case "$choice" in
+      c)
+        if bash "$msg_file"; then
+          echo
+          break
+        else
+          rc=$?
+          echo "commit failed (exit $rc) — opening editor on message" >&2
+          ${EDITOR:-zed -w} "$msg_file"
+        fi
+        ;;
+      e) ${EDITOR:-zed -w} "$msg_file" ;;
+      d) git --no-pager diff --cached | ${PAGER:-less -R} ;;
+      s)
+        echo "unstaging and skipping"
+        git reset --quiet
+        break
+        ;;
+      *) echo "type c, e, d, or s" ;;
+    esac
+  done
+done
+
+echo "done. split files remain at $out/"
