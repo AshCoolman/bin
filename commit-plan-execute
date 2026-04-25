@@ -74,9 +74,11 @@ for stage_file in "$out"/*.stage; do
   label=$(basename "$base")
 
   echo "── $label ──"
+  echo "\$ $(cat "$stage_file")"
   if ! bash "$stage_file"; then
     echo "stage failed — opening editor on stage command" >&2
     ${EDITOR:-zed -w} "$stage_file"
+    echo "\$ $(cat "$stage_file")"
     if ! bash "$stage_file"; then
       echo "stage still failing, skipping" >&2
       continue
@@ -85,8 +87,13 @@ for stage_file in "$out"/*.stage; do
 
   while :; do
     echo
-    echo "staged:"
-    git diff --cached --stat
+    staged_files=$(git diff --cached --name-status)
+    if [[ -z "$staged_files" ]]; then
+      echo "staged: (nothing — already committed, no-op, or path missing)"
+    else
+      echo "staged:"
+      printf '%s\n' "$staged_files" | sed 's/^/  /'
+    fi
     echo
     echo "message: $(cat "$msg_file")"
     echo
