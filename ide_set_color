@@ -13,18 +13,20 @@ const { execSync } = require('child_process');
 
 const args = process.argv.slice(2);
 const RECURSIVE = args.includes('--recursive') || args.includes('-r');
+const PERSIST = args.includes('--persist');
 
 function printHelp() {
   console.log('Usage:');
-  console.log('  ide_set_color RRGGBB [--recursive|-r]    apply a color (bare hex)');
-  console.log("  ide_set_color '#RRGGBB'                  same, with # (quote it — zsh treats # as a comment)");
-  console.log('  ide_set_color                            interactive picker');
+  console.log('  ide_set_color RRGGBB [--recursive|-r] [--persist]   apply a color (bare hex)');
+  console.log("  ide_set_color '#RRGGBB'                             same, with # (quote it — zsh treats # as a comment)");
+  console.log('  ide_set_color                                       interactive picker');
   console.log('');
   console.log('Targets:');
   console.log('  - package.json "color" in cwd (and nested with -r)');
   console.log('  - .vscode/settings.json workbench background colors');
   console.log('  - iTerm2 current session (OSC 1337 escape)');
   console.log('  - Zed experimental.theme_overrides in ./.zed/settings.json (per-folder)');
+  console.log('  - ide_color.json in cwd, if it exists (or always with --persist)');
 }
 
 if (args.includes('--help') || args.includes('-h')) {
@@ -138,6 +140,12 @@ function setZed(repoDir, hex) {
   writeZedSettingsFile(path.join(dotZed, 'settings.json'), hex);
 }
 
+function setIdeColorJson(repoDir, hex) {
+  const p = path.join(repoDir, 'ide_color.json');
+  if (!PERSIST && !fs.existsSync(p)) return;
+  try { fs.writeFileSync(p, JSON.stringify({ color: hex }, null, 2) + '\n'); } catch (_) {}
+}
+
 function applyAll(hex) {
   const root = process.cwd();
   setPkgColor(root, hex);
@@ -145,6 +153,7 @@ function applyAll(hex) {
   for (const d of dirs) setPkgColor(d, hex);
   for (const d of [root, ...dirs]) setVSCode(d, hex);
   for (const d of [root, ...dirs]) setZed(d, hex);
+  setIdeColorJson(root, hex);
   setIterm2(hex);
   console.log(`Applied ${hex} to ${1 + dirs.length} package(s), VSCode, iTerm2, and Zed`);
 }
