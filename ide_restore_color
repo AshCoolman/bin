@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Read ./ide_color.json and re-apply via ide_set_color.
+# Useful on a fresh machine where .vscode/.zed are gitignored.
+set -euo pipefail
+
+file="${1:-ide_color.json}"
+
+if [[ ! -f "$file" ]]; then
+  echo "ide_restore_color: $file not found in $(pwd)" >&2
+  exit 1
+fi
+
+hex=$(node -e "process.stdout.write(require('./'+process.argv[1]).color)" "$file")
+
+if [[ -z "$hex" ]]; then
+  echo "ide_restore_color: no .color field in $file" >&2
+  exit 1
+fi
+
+exec ide_set_color "$hex"
