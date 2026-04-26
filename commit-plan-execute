@@ -81,19 +81,21 @@ for stage_file in "$out"/*.stage; do
     echo "\$ $(cat "$stage_file")"
     if ! bash "$stage_file"; then
       echo "stage still failing, skipping" >&2
+      echo
       continue
     fi
   fi
 
+  if [[ -z "$(git diff --cached --name-status)" ]]; then
+    echo "nothing staged — already committed or no-op, skipping"
+    echo
+    continue
+  fi
+
   while :; do
     echo
-    staged_files=$(git diff --cached --name-status)
-    if [[ -z "$staged_files" ]]; then
-      echo "staged: (nothing — already committed, no-op, or path missing)"
-    else
-      echo "staged:"
-      printf '%s\n' "$staged_files" | sed 's/^/  /'
-    fi
+    echo "staged:"
+    git diff --cached --name-status | sed 's/^/  /'
     echo
     echo "message: $(cat "$msg_file")"
     echo
