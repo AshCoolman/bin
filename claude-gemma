@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEL_NAME="gemma4:e2b-64k"
+BASE_MODEL="gemma4:e2b"
+NUM_CTX="65536"
+MODEL_DIR="${HOME}/local-models/ollama"
+MODELFILE="${MODEL_DIR}/${MODEL_NAME//:/-}.Modelfile"
+
+mkdir -p "${MODEL_DIR}"
+
+if ! ollama list | awk 'NR>1 {print $1}' | grep -Fxq "${MODEL_NAME}"; then
+  cat > "${MODELFILE}" <<EOF
+FROM ${BASE_MODEL}
+PARAMETER num_ctx ${NUM_CTX}
+EOF
+
+  ollama create "${MODEL_NAME}" -f "${MODELFILE}"
+fi
+
+export ANTHROPIC_BASE_URL="http://localhost:11434"
+export ANTHROPIC_API_KEY="local-no-auth"
+export OTEL_TRACES_EXPORTER="none"
+
+exec /Users/ashleycoleman/Downloads/claude.exe --model "${MODEL_NAME}" "$@"
