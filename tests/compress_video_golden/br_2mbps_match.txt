@@ -1,0 +1,54 @@
+
+compress_video:
+  input    : test.mp4  (0.1 MB, 0:00:05)
+  output   : test_2mbps_1x_match.mp4
+  mode     : br  (2 Mbps)
+  bitrate  : video 2000 kbps, audio 64 kbps (mono)
+  speed    : 1x   (output duration 0:00:05)
+  video    : scale 75%, fps (match), unsharp on
+  match fps: yes
+
+DRY RUN — command that would execute:
+  ffmpeg
+  -hide_banner
+  -y
+  -i
+  TMPDIR/test.mp4
+  -map
+  0:v:0
+  -map
+  0:a:0?
+  -sn
+  -dn
+  -vsync
+  0
+  -vf
+  setpts=PTS/1,scale=trunc(iw*0.75/2)*2:trunc(ih*0.75/2)*2,unsharp=5:5:1.0:5:5:0.0
+  -pix_fmt
+  yuv420p
+  -c:v
+  libx264
+  -preset
+  slow
+  -g
+  30
+  -x264-params
+  bframes=0:nal-hrd=cbr
+  -b:v
+  2000k
+  -minrate
+  2000k
+  -maxrate
+  2000k
+  -bufsize
+  4000k
+  -c:a
+  aac
+  -ac
+  1
+  -b:a
+  64k
+  -movflags
+  +faststart
+  TMPDIR/test_2mbps_1x_match.mp4
+

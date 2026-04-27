@@ -1,0 +1,54 @@
+
+compress_video:
+  input    : test.mp4  (0.1 MB, 0:00:05)
+  output   : test_max1MB_1.5x.mp4
+  mode     : mb  (target 1 MB, headroom 88%)
+  bitrate  : video 2151 kbps, audio 64 kbps (mono)
+  speed    : 1.5x   (output duration 0:00:03)
+  video    : scale 75%, fps 30, unsharp on
+  match fps: no
+
+DRY RUN — command that would execute:
+  ffmpeg
+  -hide_banner
+  -y
+  -i
+  TMPDIR/test.mp4
+  -map
+  0:v:0
+  -map
+  0:a:0?
+  -sn
+  -dn
+  -vf
+  setpts=PTS/1.5,fps=30,scale=trunc(iw*0.75/2)*2:trunc(ih*0.75/2)*2,unsharp=5:5:1.0:5:5:0.0
+  -pix_fmt
+  yuv420p
+  -c:v
+  libx264
+  -preset
+  slow
+  -g
+  30
+  -x264-params
+  bframes=0:nal-hrd=cbr
+  -b:v
+  2151k
+  -minrate
+  2151k
+  -maxrate
+  2151k
+  -bufsize
+  4302k
+  -filter:a
+  atempo=1.5
+  -c:a
+  aac
+  -ac
+  1
+  -b:a
+  64k
+  -movflags
+  +faststart
+  TMPDIR/test_max1MB_1.5x.mp4
+
