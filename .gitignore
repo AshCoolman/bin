@@ -5,3 +5,4 @@
 commit-plan/
 tmp/
 mac-triage-watch/node_modules/
+coverage/

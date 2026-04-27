@@ -1,5 +1,7 @@
 #!/bin/bash
 
+CATTY="$(cd "$(dirname "$0")" && pwd)/../catty"
+
 # Create a fresh directory for the test
 rm -rf test-env
 mkdir test-env
@@ -11,7 +13,7 @@ touch b.txt
 touch c.md
 
 # Run catty with an ignore pattern
-/Users/USER/bin/catty --ignore='*.md' --print . > output.txt
+"$CATTY" --ignore='*.md' --print . > output.txt
 
 # Check the output
 errors=0

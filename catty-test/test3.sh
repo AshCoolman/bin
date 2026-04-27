@@ -1,5 +1,7 @@
 #!/bin/bash
 
+CATTY="$(cd "$(dirname "$0")" && pwd)/../catty"
+
 # Create a fresh directory for the test
 rm -rf test-env
 mkdir test-env
@@ -22,7 +24,7 @@ touch .gitignore
 git add a.txt c.md up .gitignore
 
 # Run catty with the specified ignore pattern
-/Users/USER/bin/catty --ignore='**/*.md,package-lock.json,!up,!down,!exec,!SKILLS.md,!.gitignore' --print . > output.txt
+"$CATTY" --ignore='**/*.md,package-lock.json,!up,!down,!exec,!SKILLS.md,!.gitignore' --print . > output.txt
 
 # Check the output
 errors=0
