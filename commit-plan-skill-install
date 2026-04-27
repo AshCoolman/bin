@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Install the commit-plan skill (and surface the runtime prerequisites it needs).
+# The skill expects ./commit-plan-execute on PATH and a `git cm` alias.
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'EOF'
+commit-plan-skill-install — install the commit-plan skill into ~/.claude/skills/
+
+USAGE
+  commit-plan-skill-install              install (idempotent)
+  commit-plan-skill-install --help       this message
+
+WHAT IT DOES
+  - Copies commit-plan-skill/SKILL.md from this repo to
+    ~/.claude/skills/commit-plan/SKILL.md (backs up any existing copy with
+    a timestamped .bak suffix if it differs)
+  - Verifies commit-plan-execute is on PATH (the skill writes plans for it)
+  - Verifies a `git cm` alias exists (the plan format invokes `git cm -m ...`)
+
+REQUIREMENTS ON A NEW MACHINE
+  - Clone this repo and add it to PATH (so commit-plan-execute is callable)
+  - Have git installed
+  - Run this script
+EOF
+  exit 0
+fi
+
+repo_dir=$(cd "$(dirname "$0")" && pwd)
+src="$repo_dir/commit-plan-skill/SKILL.md"
+dest_dir="$HOME/.claude/skills/commit-plan"
+dest="$dest_dir/SKILL.md"
+
+if [[ ! -f "$src" ]]; then
+  echo "error: source not found at $src" >&2
+  echo "       expected commit-plan-skill/SKILL.md alongside this installer" >&2
+  exit 1
+fi
+
+mkdir -p "$dest_dir"
+
+if [[ -f "$dest" ]]; then
+  if diff -q "$src" "$dest" >/dev/null 2>&1; then
+    echo "skill: already up to date at $dest"
+  else
+    backup="$dest.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "$dest" "$backup"
+    cp "$src" "$dest"
+    echo "skill: updated $dest (previous version backed up to $backup)"
+  fi
+else
+  cp "$src" "$dest"
+  echo "skill: installed $dest"
+fi
+
+# --- prerequisite checks ---
+
+ok=1
+
+if command -v commit-plan-execute >/dev/null 2>&1; then
+  echo "ok:    commit-plan-execute on PATH ($(command -v commit-plan-execute))"
+else
+  echo "warn:  commit-plan-execute not on PATH" >&2
+  echo "       add this directory to PATH: $repo_dir" >&2
+  ok=0
+fi
+
+if git config --global --get alias.cm >/dev/null 2>&1; then
+  echo "ok:    git alias 'cm' configured ($(git config --global --get alias.cm))"
+else
+  echo "warn:  git alias 'cm' not set globally" >&2
+  echo "       run: git config --global alias.cm 'commit -v'" >&2
+  ok=0
+fi
+
+echo
+if [[ "$ok" -eq 1 ]]; then
+  echo "done."
+else
+  echo "done — review warnings above before using /commit-plan."
+fi

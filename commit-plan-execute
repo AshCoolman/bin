@@ -13,13 +13,24 @@ PLAN FORMAT (for AI agents — token-efficient)
   Path:      ./commit-plan/<YYYY-MM-DD-HHmm-ss>.md
   Content:   one commit per line, each line a single shell command:
              git add <files> && git cm -m "<conventional commit msg>"
-  Parser:    grep -E 'git add .* && git cm'
-             leading list markers (- or *) and surrounding backticks are stripped.
-             each line is split on ` && git cm ` so stage runs first, then commit.
+  Parser:    grep -nE 'git add .* && git cm', then exclude any line containing
+             the literal token *DONE*. Leading list markers (- or *) and
+             surrounding backticks are stripped. Each line is split on
+             ` && git cm ` so stage runs first, then commit.
   Anything else in the file is ignored — no headers, prose, or rationale needed.
 
+DONE MARKER
+  After a commit succeeds — or after its stage step is a no-op because the
+  change is already in the tree — the runner appends ` *DONE*` to that line
+  in the plan file. Re-running the same plan therefore only retries
+  unfinished commits.
+
+  To re-run a line that's already marked, delete the *DONE* token from it.
+  Do not put a literal *DONE* inside a commit message: the parser would
+  treat the line as already done and skip it.
+
 MINIMAL EXAMPLE
-  git add src/foo.ts && git cm -m "fix(foo): handle null id"
+  git add src/foo.ts && git cm -m "fix(foo): handle null id" *DONE*
   git add src/bar.ts test/bar.test.ts && git cm -m "feat(bar): add retry"
 
 RULES
@@ -29,10 +40,11 @@ RULES
   - order matters: lines run top-to-bottom
 
 RUNTIME
-  for each line:
+  for each unfinished line:
     1. stage runs automatically
     2. staged files are listed (the result, not the command)
     3. prompt: (c)ommit, (e)dit message, (d)iff, (s)kip
+    4. on commit success or empty-stage skip, the line is marked *DONE*
 EOF
   exit 0
 fi
@@ -45,32 +57,56 @@ fi
 
 out=./tmp/commit-plan
 mkdir -p "$out"
-rm -f "$out"/*.stage "$out"/*.msg "$out"/*.sh
+rm -f "$out"/*.stage "$out"/*.msg "$out"/*.sh "$out"/*.lineno
+
+mark_done() {
+  local lineno="$1"
+  local current
+  current=$(sed -n "${lineno}p" "$latest" 2>/dev/null || echo "")
+  if [[ "$current" == *"*DONE*"* ]]; then
+    return 0
+  fi
+  if ! sed -i '' "${lineno}s/\$/ *DONE*/" "$latest" 2>/dev/null; then
+    echo "warning: failed to append *DONE* to line $lineno of $latest" >&2
+  fi
+}
+
+total=$(grep -cE 'git add .* && git cm' "$latest" 2>/dev/null || true)
+total="${total:-0}"
 
 i=0
-while IFS= read -r line; do
+while IFS= read -r entry; do
+  lineno="${entry%%:*}"
+  raw="${entry#*:}"
+  cleaned=$(printf '%s' "$raw" | sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//; s/^`//; s/`[[:space:]]*$//')
   i=$((i + 1))
   printf -v base '%02d' "$i"
-  stage_part="${line%% && git cm *}"
-  commit_part="git cm ${line#* && git cm }"
+  stage_part="${cleaned%% && git cm *}"
+  commit_part="git cm ${cleaned#* && git cm }"
   printf '%s\n' "$stage_part" > "$out/$base.stage"
   printf '%s\n' "$commit_part" > "$out/$base.msg"
+  printf '%s\n' "$lineno"     > "$out/$base.lineno"
 done < <(
-  grep -E 'git add .* && git cm' "$latest" \
-    | sed -E 's/^[[:space:]]*([-*][[:space:]]+)?//; s/^`//; s/`[[:space:]]*$//'
+  grep -nE 'git add .* && git cm' "$latest" | grep -v '\*DONE\*' || true
 )
 
 if [[ "$i" -eq 0 ]]; then
+  if [[ "$total" -gt 0 ]]; then
+    echo "all $total commit(s) in $latest already marked *DONE*"
+    exit 0
+  fi
   echo "no commit commands found in $latest" >&2
   exit 1
 fi
 
-echo "wrote $i commit(s) to $out/ (from $latest)"
+echo "wrote $i unfinished commit(s) to $out/ (from $latest, $total total)"
 echo
 
 for stage_file in "$out"/*.stage; do
   base="${stage_file%.stage}"
   msg_file="$base.msg"
+  lineno_file="$base.lineno"
+  lineno=$(cat "$lineno_file" 2>/dev/null || echo "")
   label=$(basename "$base")
 
   echo "── $label ──"
@@ -87,7 +123,8 @@ for stage_file in "$out"/*.stage; do
   fi
 
   if [[ -z "$(git diff --cached --name-status)" ]]; then
-    echo "nothing staged — already committed or no-op, skipping"
+    echo "nothing staged — already committed or no-op, marking done"
+    [[ -n "$lineno" ]] && mark_done "$lineno"
     echo
     continue
   fi
@@ -103,6 +140,7 @@ for stage_file in "$out"/*.stage; do
     case "$choice" in
       c)
         if bash "$msg_file"; then
+          [[ -n "$lineno" ]] && mark_done "$lineno"
           echo
           break
         else
@@ -114,7 +152,7 @@ for stage_file in "$out"/*.stage; do
       e) ${EDITOR:-zed -w} "$msg_file" ;;
       d) git --no-pager diff --cached | ${PAGER:-less -R} ;;
       s)
-        echo "unstaging and skipping"
+        echo "unstaging and skipping (line not marked done)"
         git reset --quiet
         break
         ;;
