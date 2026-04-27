@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+npx @anthropic-ai/claude-code@2.1.94 "$@"
