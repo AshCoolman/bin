@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage:
+#   ./press-enter-at.sh 23:30
+#   ./press-enter-at.sh 09:05
+
+TARGET="${1:?Usage: $0 HH:MM}"
+
+while true; do
+  NOW="$(date +%H:%M)"
+  if [ "$NOW" = "$TARGET" ]; then
+    osascript -e 'tell application "System Events" to key code 36'
+    exit 0
+  fi
+  sleep 1
+done
